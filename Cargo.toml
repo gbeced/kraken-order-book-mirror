@@ -1,0 +1,15 @@
+[package]
+name = "rust-order-book-mirror"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+base64 = "0.23.1"
+hmac = "0.13"
+reqwest = "0.13.5"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.11"
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = "0.30"
+tungstenite = "0.30"
