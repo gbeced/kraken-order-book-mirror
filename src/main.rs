@@ -1,9 +1,11 @@
-use tokio;
+use futures_util::{SinkExt, StreamExt};
+use serde_json::json;
 use std::env;
-
-// use tungstenite::client::{IntoClientRequest};
-// use tungstenite::http::{Method, Request};
-
+use tokio;
+use tokio_tungstenite::{connect_async};
+use tungstenite::client::{IntoClientRequest};
+use tungstenite::http::{Method, Request};
+use tungstenite::{Message};
 
 mod kraken {
 
@@ -73,9 +75,9 @@ mod kraken {
 
 #[tokio::main]
 async fn main() {
+    // Token.
     let api_key = env::var("KRAKEN_API_KEY").expect("KRAKEN_API_KEY must be set");
     let api_secret = env::var("KRAKEN_API_SECRET").expect("KRAKEN_API_SECRET must be set");
-
     let token = match kraken::get_websocket_auth_token(&api_key, &api_secret).await {
         Ok(token) => token,
         Err(error) => {
@@ -83,9 +85,64 @@ async fn main() {
             return;
         },
     };
-    println!("Token: {}", token.token);
 
-    // let mut request = "wss://ws.kraken.com/v2".into_client_request().unwrap();
-    // request.headers_mut().insert("api-key", "42".parse().unwrap());
-    // let (stream, response) = connect_async(request).await.unwrap();
+    // Connect.
+    let Ok(mut request) = "wss://ws-l3.kraken.com/v2".into_client_request() else {
+            eprintln!("Invalid ws url");
+            return;
+    };
+    let (stream, _response) = match connect_async(request).await {
+        Err(error) => {
+            eprintln!("Failed to connect: {error}");
+            return;
+        },
+        Ok((stream, response)) => {
+            println!("Connection succeeded!");
+            // println!("Stream: {:?}", stream);
+            // println!("Response: {:?}", response);
+
+            (stream, response)
+        },
+    };
+    let (mut write, mut read) = stream.split();
+
+    // Subscribe.
+    let subscribe_msg = json!({
+        "method": "subscribe",
+        "params": {
+            "channel": "level3",
+            "depth": 10,
+            "symbol": ["BTC/USD"],
+            "snapshot": true,
+            "token": token.token
+        }
+    });
+    if let Err(error) = write.send(Message::Text(subscribe_msg.to_string().into())).await {
+            eprintln!("Failed to subscribe: {error}");
+            return;
+    }
+
+    // Read loop.
+    while let Some(msg) = read.next().await {
+        match msg {
+            Ok(Message::Text(text)) => {
+                println!("{text}");
+            }
+            Ok(Message::Ping(data)) => {
+                if let Err(error) = write.send(Message::Pong(data)).await {
+                    eprintln!("Failed to pong: {error}");
+                }
+            }
+            Ok(Message::Close(frame)) => {
+                eprintln!("Connection closed: {frame:?}");
+                break;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                eprintln!("WebSocket error: {error}");
+                break;
+            }
+        }
+    }
+
 }
