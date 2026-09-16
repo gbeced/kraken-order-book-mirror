@@ -25,10 +25,10 @@ pub struct TokenResult {
     pub token: String,
 }
 
-fn get_signature(url_path: &str, nonce: u128, api_secret: &str) -> Result<String, Box<dyn Error>> {
-    let encoded_data = format!("{nonce}nonce={nonce}");
+fn get_signature(url_path: &str, nonce: u128, body: &str, api_secret: &str) -> Result<String, Box<dyn Error>> {
+    let encoded_data = format!("{nonce}{body}");
     let digest = Sha256::digest(&encoded_data);
-    let mut message: Vec<u8> = Vec::with_capacity(encoded_data.bytes().len() + digest.len());
+    let mut message: Vec<u8> = Vec::with_capacity(url_path.len() + digest.len());
     message.extend_from_slice(url_path.as_bytes());
     message.extend_from_slice(&digest);
 
@@ -43,17 +43,17 @@ fn get_signature(url_path: &str, nonce: u128, api_secret: &str) -> Result<String
 async fn get_websocket_auth_token(api_key: &str, api_secret: &str) -> Result<TokenResult, Box<dyn Error>> {
     let path = "/0/private/GetWebSocketsToken";
     let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
-    let signature = get_signature(path, nonce, api_secret)?;
+    let body = format!("nonce={nonce}");
+    let signature = get_signature(path, nonce, &body, api_secret)?;
 
     let url = format!("https://api.kraken.com{path}");
     // TODO: Use https://docs.rs/serde_qs/latest/serde_qs/ for encoding.
-    let data = format!("nonce={nonce}");
     let client = reqwest::Client::new();
     let response = client.post(url)
         .header("API-Key", api_key)
         .header("API-Sign", signature)
         .header("Content-Type", "application/x-www-form-urlencoded")
-        .body(data)
+        .body(body)
         .send().await?
         .error_for_status()?
         ;
