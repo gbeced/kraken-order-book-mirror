@@ -67,30 +67,12 @@ async fn get_websocket_auth_token(api_key: &str, api_secret: &str) -> Result<Tok
 }
 
 
-pub async fn connect_and_dispatch(api_key: &str, api_secret: &str) {
-    let token = match get_websocket_auth_token(&api_key, &api_secret).await {
-        Ok(token) => token,
-        Err(error) => {
-            eprintln!("Error fetching auth token: {error}");
-            return;
-        },
-    };
+pub async fn connect_and_dispatch(api_key: &str, api_secret: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let token = get_websocket_auth_token(&api_key, &api_secret).await?;
 
     // Connect.
-    let Ok(request) = "wss://ws-l3.kraken.com/v2".into_client_request() else {
-            eprintln!("Invalid ws url");
-            return;
-    };
-    let (stream, _response) = match connect_async(request).await {
-        Err(error) => {
-            eprintln!("Failed to connect: {error}");
-            return;
-        },
-        Ok((stream, response)) => {
-            println!("Connection succeeded! Expires at {}", token.expires);
-            (stream, response)
-        },
-    };
+    let request = "wss://ws-l3.kraken.com/v2".into_client_request()?;
+    let (stream, _response) = connect_async(request).await?;
     let (mut write, mut read) = stream.split();
 
     // Subscribe.
@@ -104,10 +86,7 @@ pub async fn connect_and_dispatch(api_key: &str, api_secret: &str) {
             "token": token.token
         }
     });
-    if let Err(error) = write.send(Message::Text(subscribe_msg.to_string().into())).await {
-            eprintln!("Failed to subscribe: {error}");
-            return;
-    }
+    write.send(Message::Text(subscribe_msg.to_string().into())).await?;
 
     // Read loop.
     while let Some(msg) = read.next().await {
@@ -132,4 +111,5 @@ pub async fn connect_and_dispatch(api_key: &str, api_secret: &str) {
         }
     }
 
+    Ok(())
 }
