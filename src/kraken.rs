@@ -107,13 +107,11 @@ pub async fn connect_and_dispatch(api_key: &str, api_secret: &str) -> Result<(),
                 }
             }
             Ok(Message::Close(frame)) => {
-                eprintln!("Connection closed: {frame:?}");
-                break;
+                return Err(format!("Connection closed: {frame:?}").into());
             }
             Ok(_) => {}
             Err(error) => {
-                eprintln!("WebSocket error: {error}");
-                break;
+                return Err(error.into());
             }
         }
     }
