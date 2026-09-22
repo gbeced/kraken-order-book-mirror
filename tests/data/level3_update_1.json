@@ -1,0 +1,29 @@
+{
+  "checksum": 782538988,
+  "symbol": "BTC/USD",
+  "timestamp": "2026-09-15T21:28:25.964171032Z",
+  "bids": [
+    {
+      "event": "delete",
+      "order_id": "OMVUUZ-AYWAJ-3VZUEJ",
+      "limit_price": 75644.7,
+      "order_qty": 1.32196829,
+      "timestamp": "2026-09-15T21:28:25.964171032Z"
+    },
+    {
+      "event": "add",
+      "order_id": "OBAQKK-P2VCJ-M2I5SA",
+      "limit_price": 75638.4,
+      "order_qty": 0.12904662,
+      "timestamp": "2026-09-15T21:28:22.736951654Z"
+    },
+    {
+      "event": "add",
+      "order_id": "O4AWAO-YOARQ-XTUAIA",
+      "limit_price": 75638.4,
+      "order_qty": 0.82985099,
+      "timestamp": "2026-09-15T21:28:23.856266920Z"
+    }
+  ],
+  "asks": []
+}

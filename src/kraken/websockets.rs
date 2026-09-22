@@ -8,7 +8,6 @@ use tungstenite::client::IntoClientRequest;
 
 use super::utils;
 
-
 #[derive(Debug, Deserialize)]
 struct ApiResponse<T> {
     error: Vec<String>,
@@ -49,7 +48,6 @@ async fn get_websocket_auth_token(
 
     Ok(token_result)
 }
-
 
 pub async fn connect_and_dispatch(api_key: &str, api_secret: &str) -> Result<(), Box<dyn Error>> {
     let token = get_websocket_auth_token(api_key, api_secret).await?;

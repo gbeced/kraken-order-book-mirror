@@ -5,7 +5,6 @@ use std::error::Error;
 
 type HmacSha512 = Hmac<Sha512>;
 
-
 pub fn get_signature(
     url_path: &str,
     nonce: u128,
@@ -26,7 +25,6 @@ pub fn get_signature(
     Ok(signature)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -42,7 +40,9 @@ mod tests {
     #[test]
     fn sign_fails_with_invalid_key() {
         assert_eq!(
-            get_signature("/0/private/GetWebSocketsToken", 10, "nonce=10", "🤓").unwrap_err().to_string(),
+            get_signature("/0/private/GetWebSocketsToken", 10, "nonce=10", "🤓")
+                .unwrap_err()
+                .to_string(),
             "Invalid symbol 240, offset 0."
         );
     }
