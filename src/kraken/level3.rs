@@ -43,32 +43,46 @@ struct OrderBookUpdater {
 
 impl<'de, TOrder: Deserialize<'de>> OrderBook<TOrder> {
     fn from_json_str(raw: &'de str) -> Result<OrderBook<TOrder>, Box<dyn Error>> {
-        let bla  = serde_json::from_str(raw)?;
-        Ok(bla)
+        Ok(serde_json::from_str(raw)?)
+    }
+}
+
+impl OrderBookSnapshot {
+    fn calculate_checksum(&self) -> u32 {
+        let mut buff = String::with_capacity(self.asks.len() * 6 * 2 + self.bids.len() * 6 * 2);
+        for order in self.asks.iter().chain(self.bids.iter()) {
+            buff.push_str(&serialize_decimal(&order.limit_price));
+            buff.push_str(&serialize_decimal(&order.order_qty));
+        }
+        crc32fast::hash(buff.as_bytes())
     }
 }
 
 impl OrderBookUpdater {
     fn new(snapshot: OrderBookSnapshot, max_depth: usize) -> Self {
-        OrderBookUpdater { order_book: snapshot, max_depth }
+        OrderBookUpdater {
+            order_book: snapshot,
+            max_depth,
+        }
     }
 
-    fn apply(self: &mut Self, update: OrderBookUpdate) -> Result<(), Box<dyn Error>> {
+    fn apply(&mut self, update: OrderBookUpdate) -> Result<(), Box<dyn Error>> {
         if self.order_book.timestamp > update.timestamp {
-            return Err(format!("Update is old").into())
+            return Err("Update is old".into());
         }
 
         self.order_book.timestamp = update.timestamp;
-        update_helper(self.order_book.bids.as_mut(), update.bids, false);
-        update_helper(self.order_book.asks.as_mut(), update.asks, true);
+        self.order_book.checksum = update.checksum;
+        update_helper(self.order_book.bids.as_mut(), update.bids, false)?;
+        update_helper(self.order_book.asks.as_mut(), update.asks, true)?;
         truncate_price_level(self.order_book.bids.as_mut(), self.max_depth);
         Ok(())
     }
 }
 
-fn truncate_price_level(orders: &mut Vec<Order>, max_depth: usize)  {
+fn truncate_price_level(orders: &mut Vec<Order>, max_depth: usize) {
     if orders.len() <= max_depth {
-        return
+        return;
     }
 
     // Find the truncate position.
@@ -91,7 +105,20 @@ fn truncate_price_level(orders: &mut Vec<Order>, max_depth: usize)  {
     }
 }
 
-fn update_helper(orders: &mut Vec<Order>, order_events: Vec<OrderEvent>, sort_asc: bool) -> Result<(), Box<dyn Error>> {
+fn serialize_decimal(value: &Decimal) -> String {
+    let mut value = value.to_string().replace(".", "");
+    // Remove leading zeroes.
+    while value.starts_with('0') {
+        value.remove(0);
+    }
+    value
+}
+
+fn update_helper(
+    orders: &mut Vec<Order>,
+    order_events: Vec<OrderEvent>,
+    sort_asc: bool,
+) -> Result<(), Box<dyn Error>> {
     for order_event in order_events {
         match order_event.event.as_str() {
             "add" => {
@@ -103,34 +130,38 @@ fn update_helper(orders: &mut Vec<Order>, order_events: Vec<OrderEvent>, sort_as
                 };
 
                 // Orders are sorted by limit_price.
-                let idx = orders.partition_point(|o| {
-                    match sort_asc {
-                        true => o.limit_price <= order.limit_price,
-                        false => o.limit_price >= order.limit_price,
-                    }
+                let idx = orders.partition_point(|o| match sort_asc {
+                    true => o.limit_price <= order.limit_price,
+                    false => o.limit_price >= order.limit_price,
                 });
                 orders.insert(idx, order);
-            },
+            }
             "delete" => {
-                match orders.iter().position(|o| {o.order_id == order_event.order_id}) {
+                match orders
+                    .iter()
+                    .position(|o| o.order_id == order_event.order_id)
+                {
                     Some(index) => {
                         orders.remove(index);
-                    },
+                    }
                     None => {
                         return Err(format!("Order not found {}", order_event.order_id).into());
-                    },
+                    }
                 }
-            },
+            }
             "modify" => {
-                match orders.iter().position(|o| {o.order_id == order_event.order_id}) {
+                match orders
+                    .iter()
+                    .position(|o| o.order_id == order_event.order_id)
+                {
                     Some(index) => {
                         orders[index].order_qty = order_event.order_qty;
-                    },
+                    }
                     None => {
                         return Err(format!("Order not found {}", order_event.order_id).into());
-                    },
+                    }
                 }
-            },
+            }
             _ => {
                 return Err(format!("Unknown event {}", order_event.event).into());
             }
@@ -138,7 +169,6 @@ fn update_helper(orders: &mut Vec<Order>, order_events: Vec<OrderEvent>, sort_as
     }
     Ok(())
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -154,6 +184,7 @@ mod tests {
 
         assert_eq!(snapshot.symbol, String::from("BTC/USD"));
         assert_eq!(snapshot.checksum, 30690248);
+        assert_eq!(snapshot.calculate_checksum(), 30690248);
         assert_eq!(
             snapshot.timestamp.to_string(),
             "2026-09-15 21:28:25.745828658 UTC"
@@ -181,7 +212,8 @@ mod tests {
         let mut updater = OrderBookUpdater::new(snapshot, 10);
         updater.apply(update).unwrap();
 
-        // assert_eq!(updater.order_book.checksum, 782538988);
+        assert_eq!(updater.order_book.checksum, 782538988);
+        assert_eq!(updater.order_book.calculate_checksum(), 782538988);
         assert_eq!(
             updater.order_book.timestamp.to_string(),
             "2026-09-15 21:28:25.964171032 UTC"
