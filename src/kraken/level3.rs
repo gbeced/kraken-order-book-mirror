@@ -176,7 +176,7 @@ mod tests {
 
     #[test]
     fn snapshot_plus_update() {
-        // Load and check snapshot.
+        // Load and check the snapshot.
         let snapshot = OrderBookSnapshot::from_json_str(
             &std::fs::read_to_string("tests/data/level3_snapshot.json").unwrap(),
         )
@@ -192,7 +192,7 @@ mod tests {
         assert_eq!(snapshot.asks.len(), 18);
         assert_eq!(snapshot.bids.len(), 13);
 
-        // Load and check update.
+        // Load and check the update.
         let update = OrderBookUpdate::from_json_str(
             &std::fs::read_to_string("tests/data/level3_update_1.json").unwrap(),
         )
@@ -208,7 +208,7 @@ mod tests {
         assert_eq!(update.bids.len(), 3);
         assert_eq!(update.bids[0].event, "delete");
 
-        // Update snapshot with update.
+        // Apply the update to the snapshot.
         let mut updater = OrderBookUpdater::new(snapshot, 10);
         updater.apply(update).unwrap();
 
