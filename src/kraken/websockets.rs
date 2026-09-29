@@ -78,11 +78,6 @@ pub async fn connect_and_dispatch(api_key: &str, api_secret: &str, channels: &[&
             Ok(Message::Text(text)) => {
                 println!("{text}");
             }
-            Ok(Message::Ping(data)) => {
-                if let Err(error) = write.send(Message::Pong(data)).await {
-                    eprintln!("Failed to pong: {error}");
-                }
-            }
             Ok(Message::Close(frame)) => {
                 return Err(format!("Connection closed: {frame:?}").into());
             }
