@@ -49,7 +49,7 @@ async fn get_websocket_auth_token(
     Ok(token_result)
 }
 
-pub async fn connect_and_dispatch(api_key: &str, api_secret: &str) -> Result<(), Box<dyn Error>> {
+pub async fn connect_and_dispatch(api_key: &str, api_secret: &str, channels: &[&str], depth: usize) -> Result<(), Box<dyn Error>> {
     let token = get_websocket_auth_token(api_key, api_secret).await?;
 
     // Connect.
@@ -62,8 +62,8 @@ pub async fn connect_and_dispatch(api_key: &str, api_secret: &str) -> Result<(),
         "method": "subscribe",
         "params": {
             "channel": "level3",
-            "depth": 10,
-            "symbol": ["BTC/USD"],
+            "depth": depth,
+            "symbol": channels,
             "snapshot": true,
             "token": token.token
         }
