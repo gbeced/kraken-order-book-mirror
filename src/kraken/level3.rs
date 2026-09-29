@@ -4,7 +4,6 @@ use serde::Deserialize;
 use std::error::Error;
 use std::path::{Path, PathBuf};
 
-
 #[derive(Deserialize)]
 struct Order {
     order_id: String,
@@ -52,19 +51,20 @@ impl<'de, TOrder: Deserialize<'de>> OrderBook<TOrder> {
 impl OrderBookSnapshot {
     fn calculate_checksum(&self) -> u32 {
         // Use at most 10 levels when calculating the checksum.
-        let max_level = 10; 
+        let max_level = 10;
 
-        let ask_count = find_price_level(&self.asks, max_level + 1).map_or(
-            self.asks.len(),
-            |i| (i - 1).max(0)
-        );
-        let bid_count = find_price_level(&self.bids, max_level + 1).map_or(
-            self.bids.len(),
-            |i| (i - 1).max(0)
-        );
+        let ask_count =
+            find_price_level(&self.asks, max_level + 1).map_or(self.asks.len(), |i| i - 1);
+        let bid_count =
+            find_price_level(&self.bids, max_level + 1).map_or(self.bids.len(), |i| i - 1);
 
         let mut buff = String::with_capacity(max_level * 6 * 2 + max_level * 6 * 2);
-        for order in self.asks.iter().take(ask_count).chain(self.bids.iter().take(bid_count)) {
+        for order in self
+            .asks
+            .iter()
+            .take(ask_count)
+            .chain(self.bids.iter().take(bid_count))
+        {
             buff.push_str(&serialize_decimal(&order.limit_price));
             buff.push_str(&serialize_decimal(&order.order_qty));
         }
@@ -95,7 +95,7 @@ impl OrderBookUpdater {
     }
 }
 
-fn find_price_level(orders: &Vec<Order>, level: usize) -> Option<usize> {
+fn find_price_level(orders: &[Order], level: usize) -> Option<usize> {
     // Returns the position for the 1st order at the given price level.
 
     if level >= orders.len() {
@@ -117,7 +117,6 @@ fn find_price_level(orders: &Vec<Order>, level: usize) -> Option<usize> {
     }
     None
 }
-
 
 fn truncate_price_level(orders: &mut Vec<Order>, max_levels: usize) {
     // Truncates orders leaving only the first max_levels.
@@ -196,7 +195,9 @@ mod tests {
     use super::*;
 
     fn data_file_path(fname: &str) -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data").join(fname)
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/data")
+            .join(fname)
     }
 
     #[test]
@@ -222,14 +223,15 @@ mod tests {
         let now = Utc::now();
         let mid_price = Decimal::from(1000);
         let qty = Decimal::from(1);
-        let mut bids: Vec<Order> = (0..10).into_iter().map(|i| {
-            Order{
+        let mut bids: Vec<Order> = (0..10)
+            .into_iter()
+            .map(|i| Order {
                 order_id: format!("buy_{i}"),
                 limit_price: mid_price - Decimal::from(i),
                 order_qty: qty,
                 timestamp: now,
-            }
-        }).collect();
+            })
+            .collect();
 
         assert_eq!(bids.len(), 10);
         assert_eq!(bids[0].limit_price, Decimal::from(1000));
@@ -267,25 +269,31 @@ mod tests {
         let mid_price = Decimal::from(1000);
         let qty = Decimal::from(1);
 
-        let mut bids: Vec<Order> = (0..14).into_iter().map(|i| {
-            Order{
+        let mut bids: Vec<Order> = (0..14)
+            .into_iter()
+            .map(|i| Order {
                 order_id: format!("buy_{i}"),
                 limit_price: mid_price - Decimal::from(i + 1),
                 order_qty: qty,
                 timestamp: now,
-            }
-        }).collect();
-        let mut asks: Vec<Order> = (0..14).into_iter().map(|i| {
-            Order{
+            })
+            .collect();
+        let mut asks: Vec<Order> = (0..14)
+            .into_iter()
+            .map(|i| Order {
                 order_id: format!("sell_{i}"),
                 limit_price: mid_price + Decimal::from(i + 1),
                 order_qty: qty,
                 timestamp: now,
-            }
-        }).collect();
+            })
+            .collect();
 
         let snapshot = OrderBookSnapshot {
-            symbol: String::from("BTC/USD"), checksum: 0, timestamp: now, bids, asks
+            symbol: String::from("BTC/USD"),
+            checksum: 0,
+            timestamp: now,
+            bids,
+            asks,
         };
         assert_eq!(snapshot.asks.len(), 14);
         assert_eq!(snapshot.bids.len(), 14);
@@ -298,7 +306,9 @@ mod tests {
         // Apply an empty update just to get the orderbook truncated.
         let mut updater = OrderBookUpdater::new(snapshot, 10);
         let update = OrderBookUpdate {
-            symbol: String::from("BTC/USD"), checksum: 0, timestamp: now,
+            symbol: String::from("BTC/USD"),
+            checksum: 0,
+            timestamp: now,
             bids: Vec::new(),
             asks: Vec::new(),
         };
