@@ -2,6 +2,8 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use std::error::Error;
+use std::path::{Path, PathBuf};
+
 
 #[derive(Deserialize)]
 struct Order {
@@ -193,11 +195,15 @@ fn update_helper(
 mod tests {
     use super::*;
 
+    fn data_file_path(fname: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data").join(fname)
+    }
+
     #[test]
     fn find_price_levels() {
         // Load and check the snapshot.
         let snapshot = OrderBookSnapshot::from_json_str(
-            &std::fs::read_to_string("tests/data/level3_snapshot.json").unwrap(),
+            &std::fs::read_to_string(data_file_path("level3_snapshot.json")).unwrap(),
         )
         .unwrap();
 
@@ -311,7 +317,7 @@ mod tests {
     fn snapshot_plus_update() {
         // Load and check the snapshot.
         let snapshot = OrderBookSnapshot::from_json_str(
-            &std::fs::read_to_string("tests/data/level3_snapshot.json").unwrap(),
+            &std::fs::read_to_string(data_file_path("level3_snapshot.json")).unwrap(),
         )
         .unwrap();
 
@@ -327,7 +333,7 @@ mod tests {
 
         // Load and check the update.
         let update = OrderBookUpdate::from_json_str(
-            &std::fs::read_to_string("tests/data/level3_update_1.json").unwrap(),
+            &std::fs::read_to_string(data_file_path("level3_update_1.json")).unwrap(),
         )
         .unwrap();
 
