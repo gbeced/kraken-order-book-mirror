@@ -49,8 +49,20 @@ impl<'de, TOrder: Deserialize<'de>> OrderBook<TOrder> {
 
 impl OrderBookSnapshot {
     fn calculate_checksum(&self) -> u32 {
-        let mut buff = String::with_capacity(self.asks.len() * 6 * 2 + self.bids.len() * 6 * 2);
-        for order in self.asks.iter().chain(self.bids.iter()) {
+        // Use at most 10 levels when calculating the checksum.
+        let max_level = 10; 
+
+        let ask_count = find_price_level(&self.asks, max_level + 1).map_or(
+            self.asks.len(),
+            |i| (i - 1).max(0)
+        );
+        let bid_count = find_price_level(&self.bids, max_level + 1).map_or(
+            self.bids.len(),
+            |i| (i - 1).max(0)
+        );
+
+        let mut buff = String::with_capacity(max_level * 6 * 2 + max_level * 6 * 2);
+        for order in self.asks.iter().take(ask_count).chain(self.bids.iter().take(bid_count)) {
             buff.push_str(&serialize_decimal(&order.limit_price));
             buff.push_str(&serialize_decimal(&order.order_qty));
         }
@@ -81,27 +93,33 @@ impl OrderBookUpdater {
     }
 }
 
-fn truncate_price_level(orders: &mut Vec<Order>, max_depth: usize) {
-    if orders.len() <= max_depth {
-        return;
+fn find_price_level(orders: &Vec<Order>, level: usize) -> Option<usize> {
+    // Returns the position for the 1st order at the given price level.
+
+    if level >= orders.len() {
+        return None;
     }
 
-    // Find the truncate position.
-    let mut level: (Decimal, usize) = (orders[0].limit_price, 0);
-    let mut truncate_pos: Option<usize> = None;
+    // Find the price leel.
+    let mut price_level: (Decimal, usize) = (orders[0].limit_price, 0);
     for (index, order) in orders.iter().enumerate() {
-        if order.limit_price != level.0 {
+        if order.limit_price != price_level.0 {
             // Update the price level.
-            level.0 = order.limit_price;
-            level.1 += 1;
+            price_level.0 = order.limit_price;
+            price_level.1 += 1;
         }
-        // Stop once we reached the truncate position.
-        if level.1 == max_depth {
-            truncate_pos = Some(index);
-            break;
+        // Stop once we reached the price level.
+        if price_level.1 == level {
+            return Some(index);
         }
     }
-    if let Some(truncate_pos) = truncate_pos {
+    None
+}
+
+
+fn truncate_price_level(orders: &mut Vec<Order>, max_levels: usize) {
+    // Truncates orders leaving only the first max_levels.
+    if let Some(truncate_pos) = find_price_level(orders, max_levels) {
         orders.drain(truncate_pos..);
     }
 }
@@ -176,6 +194,120 @@ mod tests {
     use super::*;
 
     #[test]
+    fn find_price_levels() {
+        // Load and check the snapshot.
+        let snapshot = OrderBookSnapshot::from_json_str(
+            &std::fs::read_to_string("tests/data/level3_snapshot.json").unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(find_price_level(&snapshot.bids, 0), Some(0));
+        assert_eq!(find_price_level(&snapshot.bids, 1), Some(4));
+        assert_eq!(find_price_level(&snapshot.bids, 9), Some(12));
+        assert_eq!(find_price_level(&snapshot.bids, 10), None);
+
+        let empty_vec: Vec<Order> = Vec::new();
+        assert_eq!(find_price_level(&empty_vec, 0), None);
+        assert_eq!(find_price_level(&empty_vec, 1), None);
+    }
+
+    #[test]
+    fn truncate_price_levels() {
+        let now = Utc::now();
+        let mid_price = Decimal::from(1000);
+        let qty = Decimal::from(1);
+        let mut bids: Vec<Order> = (0..10).into_iter().map(|i| {
+            Order{
+                order_id: format!("buy_{i}"),
+                limit_price: mid_price - Decimal::from(i),
+                order_qty: qty,
+                timestamp: now,
+            }
+        }).collect();
+
+        assert_eq!(bids.len(), 10);
+        assert_eq!(bids[0].limit_price, Decimal::from(1000));
+        assert_eq!(bids[9].limit_price, Decimal::from(991));
+
+        // Nothing should change.
+        truncate_price_level(bids.as_mut(), 10);
+
+        assert_eq!(bids.len(), 10);
+        assert_eq!(bids[0].limit_price, Decimal::from(1000));
+        assert_eq!(bids[9].limit_price, Decimal::from(991));
+
+        // Just one level removed.
+        truncate_price_level(bids.as_mut(), 9);
+
+        assert_eq!(bids.len(), 9);
+        assert_eq!(bids[0].limit_price, Decimal::from(1000));
+        assert_eq!(bids[8].limit_price, Decimal::from(992));
+
+        // Leave only the first level.
+        truncate_price_level(bids.as_mut(), 1);
+
+        assert_eq!(bids.len(), 1);
+        assert_eq!(bids[0].limit_price, Decimal::from(1000));
+
+        // No levels at all.
+        truncate_price_level(bids.as_mut(), 0);
+
+        assert_eq!(bids.len(), 0);
+    }
+
+    #[test]
+    fn truncate_order_book_snapshot() {
+        let now = Utc::now();
+        let mid_price = Decimal::from(1000);
+        let qty = Decimal::from(1);
+
+        let mut bids: Vec<Order> = (0..14).into_iter().map(|i| {
+            Order{
+                order_id: format!("buy_{i}"),
+                limit_price: mid_price - Decimal::from(i + 1),
+                order_qty: qty,
+                timestamp: now,
+            }
+        }).collect();
+        let mut asks: Vec<Order> = (0..14).into_iter().map(|i| {
+            Order{
+                order_id: format!("sell_{i}"),
+                limit_price: mid_price + Decimal::from(i + 1),
+                order_qty: qty,
+                timestamp: now,
+            }
+        }).collect();
+
+        let snapshot = OrderBookSnapshot {
+            symbol: String::from("BTC/USD"), checksum: 0, timestamp: now, bids, asks
+        };
+        assert_eq!(snapshot.asks.len(), 14);
+        assert_eq!(snapshot.bids.len(), 14);
+        assert_eq!(snapshot.asks[13].limit_price, Decimal::from(1014));
+        assert_eq!(snapshot.asks[0].limit_price, Decimal::from(1001));
+        assert_eq!(snapshot.bids[0].limit_price, Decimal::from(999));
+        assert_eq!(snapshot.bids[13].limit_price, Decimal::from(986));
+        assert_eq!(snapshot.calculate_checksum(), 2215799079);
+
+        // Apply an empty update just to get the orderbook truncated.
+        let mut updater = OrderBookUpdater::new(snapshot, 10);
+        let update = OrderBookUpdate {
+            symbol: String::from("BTC/USD"), checksum: 0, timestamp: now,
+            bids: Vec::new(),
+            asks: Vec::new(),
+        };
+        updater.apply(update).unwrap();
+
+        assert_eq!(updater.order_book.asks.len(), 10);
+        assert_eq!(updater.order_book.bids.len(), 10);
+        assert_eq!(updater.order_book.asks[9].limit_price, Decimal::from(1010));
+        assert_eq!(updater.order_book.asks[0].limit_price, Decimal::from(1001));
+        assert_eq!(updater.order_book.bids[0].limit_price, Decimal::from(999));
+        assert_eq!(updater.order_book.bids[9].limit_price, Decimal::from(990));
+        assert_eq!(updater.order_book.calculate_checksum(), 2215799079);
+    }
+
+    #[test]
     fn snapshot_plus_update() {
         // Load and check the snapshot.
         let snapshot = OrderBookSnapshot::from_json_str(
@@ -221,56 +353,5 @@ mod tests {
         );
         assert_eq!(updater.order_book.asks.len(), 18);
         assert_eq!(updater.order_book.bids.len(), 14);
-    }
-
-    #[test]
-    fn truncate() {
-        let now = Utc::now();
-        let mid_price = Decimal::from(1000);
-        let qty = Decimal::from(1);
-
-        let mut bids: Vec<Order> = (0..14).into_iter().map(|i| {
-            Order{
-                order_id: format!("buy_{i}"),
-                limit_price: mid_price - Decimal::from(i + 1),
-                order_qty: qty,
-                timestamp: now,
-            }
-        }).collect();
-        let mut asks: Vec<Order> = (0..14).into_iter().map(|i| {
-            Order{
-                order_id: format!("sell_{i}"),
-                limit_price: mid_price + Decimal::from(i + 1),
-                order_qty: qty,
-                timestamp: now,
-            }
-        }).collect();
-
-        let snapshot = OrderBookSnapshot {
-            symbol: String::from("BTC/USD"), checksum: 0, timestamp: now, bids, asks
-        };
-        assert_eq!(snapshot.asks.len(), 14);
-        assert_eq!(snapshot.bids.len(), 14);
-        assert_eq!(snapshot.asks[13].limit_price, Decimal::from(1014));
-        assert_eq!(snapshot.asks[0].limit_price, Decimal::from(1001));
-        assert_eq!(snapshot.bids[0].limit_price, Decimal::from(999));
-        assert_eq!(snapshot.bids[13].limit_price, Decimal::from(986));
-
-        // Apply an empty update to the snapshot just to get it truncated.
-        let mut updater = OrderBookUpdater::new(snapshot, 10);
-        let update = OrderBookUpdate {
-            symbol: String::from("BTC/USD"), checksum: 0, timestamp: now,
-            bids: Vec::new(),
-            asks: Vec::new(),
-        };
-        updater.apply(update).unwrap();
-
-        assert_eq!(updater.order_book.asks.len(), 10);
-        assert_eq!(updater.order_book.bids.len(), 10);
-        assert_eq!(updater.order_book.asks[9].limit_price, Decimal::from(1010));
-        assert_eq!(updater.order_book.asks[0].limit_price, Decimal::from(1001));
-        assert_eq!(updater.order_book.bids[0].limit_price, Decimal::from(999));
-        assert_eq!(updater.order_book.bids[9].limit_price, Decimal::from(990));
-
     }
 }
