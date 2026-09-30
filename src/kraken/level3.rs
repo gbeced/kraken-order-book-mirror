@@ -50,19 +50,18 @@ impl<'de, TOrder: Deserialize<'de>> OrderBook<TOrder> {
 
 impl OrderBookSnapshot {
     fn calculate_checksum(&self) -> u32 {
-        // Use at most 10 levels when calculating the checksum.
-        let max_level = 10;
-
+        // Kraken always hashes the top 10 price levels, whatever depth was subscribed.
+        // `find_price_level` is 0-based, so level 10 is the first level outside that window.
+        const CHECKSUM_PRICE_LEVELS: usize = 10;
         let ask_count =
-            find_price_level(&self.asks, max_level + 1).map_or(self.asks.len(), |i| i - 1);
+            find_price_level(&self.asks, CHECKSUM_PRICE_LEVELS).unwrap_or(self.asks.len());
         let bid_count =
-            find_price_level(&self.bids, max_level + 1).map_or(self.bids.len(), |i| i - 1);
+            find_price_level(&self.bids, CHECKSUM_PRICE_LEVELS).unwrap_or(self.bids.len());
 
-        let mut buff = String::with_capacity(max_level * 6 * 2 + max_level * 6 * 2);
+        let mut buff =
+            String::with_capacity((ask_count + bid_count) * 6 * 2);
         for order in self
-            .asks
-            .iter()
-            .take(ask_count)
+            .asks.iter().take(ask_count)
             .chain(self.bids.iter().take(bid_count))
         {
             buff.push_str(&serialize_decimal(&order.limit_price));
@@ -261,6 +260,34 @@ mod tests {
         truncate_price_level(bids.as_mut(), 0);
 
         assert_eq!(bids.len(), 0);
+    }
+
+    #[test]
+    fn truncate_crowded_price_levels() {
+        let now = Utc::now();
+        let qty = Decimal::from(1);
+
+        // Several orders share a price.
+        let mut crowded = Vec::new();
+        for (price, count) in [(100, 2), (90, 1), (80, 2)] {
+            for n in 0..count {
+                crowded.push(Order {
+                    order_id: format!("{price}-{n}"),
+                    limit_price: Decimal::from(price),
+                    order_qty: qty,
+                    timestamp: now,
+                });
+            }
+        }
+        truncate_price_level(crowded.as_mut(), 2);
+
+        assert_eq!(crowded.len(), 3);
+        assert_eq!(crowded[2].limit_price, Decimal::from(90));
+
+        truncate_price_level(crowded.as_mut(), 1);
+
+        assert_eq!(crowded.len(), 2);
+        assert_eq!(crowded[1].limit_price, Decimal::from(100));
     }
 
     #[test]
