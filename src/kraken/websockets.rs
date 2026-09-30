@@ -49,6 +49,11 @@ async fn get_websocket_auth_token(
     Ok(token_result)
 }
 
+fn is_channel_level3(msg: &str) -> bool {
+    const LEVEL3: &str = r#"{"channel":"level3","type":""#;
+    msg.starts_with(LEVEL3)
+}
+
 pub async fn connect_and_dispatch(api_key: &str, api_secret: &str, channels: &[&str], depth: usize) -> Result<(), Box<dyn Error>> {
     let token = get_websocket_auth_token(api_key, api_secret).await?;
 
@@ -76,7 +81,9 @@ pub async fn connect_and_dispatch(api_key: &str, api_secret: &str, channels: &[&
     while let Some(msg) = read.next().await {
         match msg {
             Ok(Message::Text(text)) => {
-                println!("{text}");
+                if is_channel_level3(text.as_str()) {
+                    println!("{text}");
+                }
             }
             Ok(Message::Close(frame)) => {
                 return Err(format!("Connection closed: {frame:?}").into());
