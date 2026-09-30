@@ -3,6 +3,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::error::Error;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tungstenite::client::IntoClientRequest;
 
@@ -54,7 +55,10 @@ fn is_channel_level3(msg: &str) -> bool {
     msg.starts_with(LEVEL3)
 }
 
-pub async fn connect_and_dispatch(api_key: &str, api_secret: &str, channels: &[&str], depth: usize) -> Result<(), Box<dyn Error>> {
+pub async fn connect_and_dispatch(
+    api_key: &str, api_secret: &str, channels: &[&str], depth: usize,
+    sender: mpsc::UnboundedSender<String>
+) -> Result<(), Box<dyn Error>> {
     let token = get_websocket_auth_token(api_key, api_secret).await?;
 
     // Connect.
@@ -82,7 +86,7 @@ pub async fn connect_and_dispatch(api_key: &str, api_secret: &str, channels: &[&
         match msg {
             Ok(Message::Text(text)) => {
                 if is_channel_level3(text.as_str()) {
-                    println!("{text}");
+                    sender.send(text.to_string())?;
                 }
             }
             Ok(Message::Close(frame)) => {
