@@ -90,6 +90,17 @@ impl OrderBookUpdater {
         update_helper(self.order_book.bids.as_mut(), update.bids, false)?;
         truncate_price_level(self.order_book.asks.as_mut(), self.max_depth);
         truncate_price_level(self.order_book.bids.as_mut(), self.max_depth);
+
+        // If the checksum verification fails, the order book ends up in an invalid state.
+        let calculated = self.order_book.calculate_checksum();
+        if calculated != self.order_book.checksum {
+            return Err(
+                format!(
+                    "Checksum mismatch after update. Calculated: {}. Update: {}",
+                    calculated, self.order_book.checksum
+                ).into()
+            )
+        }
         Ok(())
     }
 }
@@ -334,7 +345,7 @@ mod tests {
         let mut updater = OrderBookUpdater::new(snapshot, 10);
         let update = OrderBookUpdate {
             symbol: String::from("BTC/USD"),
-            checksum: 0,
+            checksum: 2215799079,
             timestamp: now,
             bids: Vec::new(),
             asks: Vec::new(),
