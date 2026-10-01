@@ -55,7 +55,7 @@ fn is_channel_level3(msg: &str) -> bool {
     msg.starts_with(LEVEL3)
 }
 
-pub async fn connect_and_dispatch(
+pub async fn connect_and_dispatch_level3(
     api_key: &str, api_secret: &str, channels: &[&str], depth: usize,
     sender: mpsc::UnboundedSender<String>
 ) -> Result<(), Box<dyn Error>> {
