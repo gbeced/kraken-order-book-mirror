@@ -1,0 +1,22 @@
+{
+  "channel": "level3",
+  "type": "update",
+  "data": [
+    {
+      "checksum": 421729592,
+      "symbol": "BTC/USD",
+      "timestamp": "2026-09-15T21:28:25.965086460Z",
+      "bids": [
+        {
+          "event": "add",
+          "order_id": "OFGZAC-FJ44S-UOTSNO",
+          "limit_price": 75645.7,
+          "order_qty": 1.32195089,
+          "timestamp": "2026-09-15T21:28:25.965086460Z"
+        }
+      ],
+      "asks": []
+    }
+  ]
+}
+

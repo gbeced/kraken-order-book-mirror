@@ -51,8 +51,10 @@ async fn get_websocket_auth_token(
 }
 
 fn is_channel_level3(msg: &str) -> bool {
-    const LEVEL3: &str = r#"{"channel":"level3","type":""#;
-    msg.starts_with(LEVEL3)
+    // TODO: Fix this.
+    // Error prone, but at this level we just wan't to forward messages ASAP.
+    const PREFIX: &str = r#"{"channel":"level3","type":""#;
+    msg.starts_with(PREFIX)
 }
 
 pub async fn connect_and_dispatch_level3(
