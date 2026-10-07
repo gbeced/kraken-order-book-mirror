@@ -3,6 +3,8 @@ use rust_decimal::Decimal;
 use serde::Deserialize;
 use std::error::Error;
 
+// https://docs.kraken.com/exchange/api-reference/spot-websocket-v2/level3
+
 #[derive(Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum Level3Kind {
@@ -22,23 +24,23 @@ struct OrderBookMsg<TOrderBook> {
     data: Vec<TOrderBook>,
 }
 
-#[derive(Deserialize)]
-struct OrderBook<TOrder> {
-    symbol: String,
-    checksum: u32,
-    timestamp: DateTime<Utc>,
-    bids: Vec<TOrder>,
-    asks: Vec<TOrder>,
+#[derive(Deserialize, Debug)]
+pub struct OrderBook<TOrder> {
+    pub symbol: String,
+    pub checksum: u32,
+    pub timestamp: DateTime<Utc>,
+    pub bids: Vec<TOrder>,
+    pub asks: Vec<TOrder>,
 }
 
-#[derive(Deserialize)]
-struct Order {
-    order_id: String,
+#[derive(Deserialize, Debug)]
+pub struct Order {
+    pub order_id: String,
     #[serde(with = "rust_decimal::serde::arbitrary_precision")]
-    limit_price: Decimal,
+    pub limit_price: Decimal,
     #[serde(with = "rust_decimal::serde::arbitrary_precision")]
-    order_qty: Decimal,
-    timestamp: DateTime<Utc>,
+    pub order_qty: Decimal,
+    pub timestamp: DateTime<Utc>,
 }
 
 #[derive(Deserialize)]
@@ -80,13 +82,15 @@ struct MirrorContext {
     max_depth: usize,
 }
 
-struct OrderBookMirror {
+pub struct OrderBookMirror {
     context: MirrorContext,
     state: MirrorState,
 }
  
 impl OrderBookSnapshot {
     fn calculate_checksum(&self) -> u32 {
+        // https://docs.kraken.com/exchange/guides/websockets/l3-checksum-v2
+
         // Kraken always hashes the top 10 price levels, whatever depth was subscribed.
         const CHECKSUM_PRICE_LEVELS: usize = 10;
         let ask_count =
@@ -174,14 +178,14 @@ impl MirrorState {
 }
 
 impl OrderBookMirror {
-    fn new(max_depth: usize) -> OrderBookMirror {
+    pub fn new(max_depth: usize) -> OrderBookMirror {
         OrderBookMirror {
             context: MirrorContext { max_depth },
             state: MirrorState::WaitingSnapshot,
         }
     }
 
-    fn on_message(& mut self, msg: &str) -> Result<(), Box<dyn Error>> {
+    pub fn on_message(& mut self, msg: &str) -> Result<(), Box<dyn Error>> {
         let peek_msg = serde_json::from_str::<PeekMsg>(msg)?;
 
         match peek_msg.kind {
@@ -201,6 +205,58 @@ impl OrderBookMirror {
             }
         }
     }
+
+    pub fn get_order_book(&self) -> Option<&OrderBookSnapshot> {
+        match self.state {
+            MirrorState::WaitingUpdate { ref updater } => {
+                Some(&updater.snapshot)
+            },
+            _ => {None}
+        }
+    }
+}
+
+fn insert_order(orders: &mut Vec<Order>, event: OrderEvent, sort_asc: bool) {
+    let order = Order {
+        order_id: event.order_id,
+        limit_price: event.limit_price,
+        order_qty: event.order_qty,
+        timestamp: event.timestamp,
+    };
+
+    // Orders are sorted by limit_price (asc/desc) + timestamp(asc).
+    let idx = orders.partition_point(|o| match sort_asc {
+        true => {
+            o.limit_price < order.limit_price || o.limit_price == order.limit_price && o.timestamp < order.timestamp
+        },
+        false => {
+            o.limit_price > order.limit_price || o.limit_price == order.limit_price && o.timestamp < order.timestamp
+        },
+
+    });
+    orders.insert(idx, order);
+}
+
+fn remove_order(orders: &mut Vec<Order>, event: &OrderEvent, sort_asc: bool) -> bool {
+    // Orders are sorted by limit_price (asc/desc) + timestamp(asc).
+    // We can't use the insertion point because the datetime of the event will be different.
+    // We locate the price level begin using a binary search first.
+    let mut price_level_begin = orders.partition_point(|o| match sort_asc {
+        true => { o.limit_price < event.limit_price },
+        false => { o.limit_price > event.limit_price },
+    });
+    // Do a linear search within the price level.
+    while let Some(order) = orders.get(price_level_begin) {
+        if order.order_id == event.order_id {
+            orders.remove(price_level_begin);
+            return true;
+        }
+        else if order.limit_price != event.limit_price {
+            return false
+        }
+       price_level_begin += 1; 
+    }
+    return false;
 }
 
 fn find_price_level(orders: &[Order], level: usize) -> Option<usize> {
@@ -250,45 +306,18 @@ fn update_orders(
     for order_event in order_events {
         match order_event.event {
             EventType::Add => {
-                let order = Order {
-                    order_id: order_event.order_id,
-                    limit_price: order_event.limit_price,
-                    order_qty: order_event.order_qty,
-                    timestamp: order_event.timestamp,
-                };
-
-                // Orders are sorted by limit_price.
-                let idx = orders.partition_point(|o| match sort_asc {
-                    true => o.limit_price <= order.limit_price,
-                    false => o.limit_price >= order.limit_price,
-                });
-                orders.insert(idx, order);
+                insert_order(orders, order_event, sort_asc);
             }
             EventType::Delete => {
-                match orders
-                    .iter()
-                    .position(|o| o.order_id == order_event.order_id)
-                {
-                    Some(index) => {
-                        orders.remove(index);
-                    }
-                    None => {
-                        return Err(format!("Order not found {}", order_event.order_id).into());
-                    }
+                if ! remove_order(orders, &order_event, sort_asc) {
+                    return Err(format!("Order not found {}", order_event.order_id).into());
                 }
             }
             EventType::Modify => {
-                match orders
-                    .iter()
-                    .position(|o| o.order_id == order_event.order_id)
-                {
-                    Some(index) => {
-                        orders[index].order_qty = order_event.order_qty;
-                    }
-                    None => {
-                        return Err(format!("Order not found {}", order_event.order_id).into());
-                    }
+                if ! remove_order(orders, &order_event, sort_asc) {
+                    return Err(format!("Order not found {}", order_event.order_id).into());
                 }
+                insert_order(orders, order_event, sort_asc);
             }
         }
     }
@@ -297,30 +326,42 @@ fn update_orders(
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path};
+    use std::path::{Path, PathBuf};
     use super::*;
     use uuid::Uuid;
+    use std::fs::File;
+    use std::io::{self, BufRead, BufReader};
+
+    fn test_file_path(fname: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/data")
+            .join(fname)
+    }
 
     fn read_test_file(fname: &str) -> String {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/data")
-            .join(fname);
+        let path = test_file_path(fname);
         std::fs::read_to_string(path).unwrap()
     }
 
-    fn build_order(lmit_price: Decimal) -> Order {
+    fn open_test_file(fname: &str) -> BufReader<File> {
+        let path = test_file_path(fname);
+        let file = File::open(path).unwrap();
+        BufReader::new(file)
+    }
+
+    fn build_order(limit_price: Decimal) -> Order {
         Order {
             order_id: Uuid::new_v4().simple().to_string(),
-            limit_price: lmit_price,
+            limit_price,
             order_qty: Decimal::from(1),
             timestamp: Utc::now(),
         }
     }
 
-    fn build_order_event(lmit_price: Decimal) -> OrderEvent {
+    fn build_order_event(limit_price: Decimal) -> OrderEvent {
         OrderEvent {
             order_id: Uuid::new_v4().simple().to_string(),
-            limit_price: lmit_price,
+            limit_price,
             order_qty: Decimal::from(1),
             timestamp: Utc::now(),
             event: EventType::Add,
@@ -498,7 +539,6 @@ mod tests {
         for file_name in file_names {
             mirror.on_message(&read_test_file(file_name)).unwrap();
         }
-
     }
 
     #[test]
@@ -520,5 +560,50 @@ mod tests {
             mirror.on_message(&read_test_file("level3_snapshot.json")).expect_err("Error expected").to_string(),
             "Expected update but received snapshot"
         );
+    }
+
+    #[test]
+    fn mirror_checksum_mismatch_after_update() {
+        let mut mirror = OrderBookMirror::new(10);
+        let mut reader = open_test_file("btc_usd_stream.log");
+        let mut line = String::new();
+
+        while reader.read_line(& mut line).unwrap() > 0 {
+            if line.len() > 0 {
+                mirror.on_message(&line).unwrap();
+            }
+            line.clear();
+        }
+
+        let snapshot = mirror.get_order_book().expect("No order book");
+        assert_eq!(snapshot.checksum, 1906173362);
+        assert_eq!(snapshot.calculate_checksum(), 1906173362);
+    }
+
+    #[test]
+    fn insert_and_delete_order() {
+        let mut orders: Vec<Order> = (0..3)
+            .into_iter()
+            .map(|i| build_order(Decimal::from(1) + Decimal::from(i)))
+            .collect();
+
+        for value in ["0.5", "1.5", "3"] {
+            let event = build_order_event(Decimal::from_str_exact(value).unwrap());
+            insert_order(&mut orders, event, true);
+        }
+        assert_eq!(orders.get(0).unwrap().limit_price, Decimal::from_str_exact("0.5").unwrap());
+        assert_eq!(orders.get(2).unwrap().limit_price, Decimal::from_str_exact("1.5").unwrap());
+        assert_eq!(orders.get(4).unwrap().limit_price, Decimal::from_str_exact("3").unwrap());
+    
+        // Remove the 2nd order.
+        let order_to_delete = orders.get(2).unwrap();
+        let event = OrderEvent {
+            order_id: order_to_delete.order_id.clone(),
+            limit_price: order_to_delete.limit_price.clone(),
+            order_qty: order_to_delete.order_qty.clone(),
+            timestamp: Utc::now(),
+            event: EventType::Delete,
+        };
+        assert!(remove_order(&mut orders, &event, true));
     }
 }

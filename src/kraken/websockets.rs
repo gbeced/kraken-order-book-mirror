@@ -21,6 +21,7 @@ struct TokenResult {
     token: String,
 }
 
+// https://docs.kraken.com/exchange/guides/websockets/authentication
 async fn get_websocket_auth_token(
     api_key: &str,
     api_secret: &str,
@@ -87,6 +88,7 @@ pub async fn connect_and_dispatch_level3(
     while let Some(msg) = read.next().await {
         match msg {
             Ok(Message::Text(text)) => {
+                // println!("{text}");
                 if is_channel_level3(text.as_str()) {
                     sender.send(text.to_string())?;
                 }
