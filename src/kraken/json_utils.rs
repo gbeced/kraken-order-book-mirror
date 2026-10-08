@@ -8,40 +8,15 @@
 // A byte scan stops at that key, so a depth-100 snapshot is not parsed twice.
 // Nested "channel" (subscribe acks) does not match. Key order and whitespace do.
 pub fn is_channel_level3(msg: &str) -> bool {
-    let mut scanner = JsonScanner::new(msg.as_bytes());
-    scanner.skip_ws();
-    if !scanner.eat(b'{') {
-        return false;
-    }
+    JsonScanner::new(msg.as_bytes()).top_level_plain_string(b"channel") == Some("level3")
+}
 
-    loop {
-        scanner.skip_ws();
-        if scanner.i >= scanner.bytes.len() || scanner.bytes[scanner.i] == b'}' {
-            return false;
-        }
-
-        let Some(key_is_channel) = scanner.match_plain_string(b"channel") else {
-            return false;
-        };
-        scanner.skip_ws();
-        if !scanner.eat(b':') {
-            return false;
-        }
-        scanner.skip_ws();
-
-        if key_is_channel {
-            return scanner.match_plain_string(b"level3") == Some(true);
-        }
-        if scanner.skip_value().is_none() {
-            return false;
-        }
-
-        scanner.skip_ws();
-        if scanner.i >= scanner.bytes.len() || scanner.bytes[scanner.i] != b',' {
-            return false;
-        }
-        scanner.i += 1;
-    }
+// Top-level "type" as a plain string borrowed from `msg`.
+// Missing, nested, or escaped values are "". The scan stops at that key.
+pub fn get_message_type(msg: &str) -> &str {
+    JsonScanner::new(msg.as_bytes())
+        .top_level_plain_string(b"type")
+        .unwrap_or("")
 }
 
 struct JsonScanner<'a> {
@@ -72,9 +47,10 @@ impl<'a> JsonScanner<'a> {
     }
 
     /// Consume a JSON string at the cursor.
-    /// When `plain_eq` is set, the result says whether the raw contents match it.
-    /// A backslash means the string is not plain, so it does not match.
-    fn scan_string(&mut self, plain_eq: Option<&[u8]>) -> Option<bool> {
+    /// `None` means the cursor is not a finished JSON string.
+    /// The bool is true when the raw contents contain no backslash.
+    /// The `&str` is those raw contents, a subslice of the input.
+    fn scan_string(&mut self) -> Option<(bool, &'a str)> {
         if self.i >= self.bytes.len() || self.bytes[self.i] != b'"' {
             return None;
         }
@@ -94,15 +70,12 @@ impl<'a> JsonScanner<'a> {
                     self.i += 1;
                 }
                 b'"' => {
-                    let equals = match plain_eq {
-                        Some(expected) => {
-                            let content = &self.bytes[start..self.i];
-                            !content.contains(&b'\\') && content == expected
-                        }
-                        None => false,
-                    };
+                    let end = self.i;
                     self.i += 1;
-                    return Some(equals);
+                    let content = &self.bytes[start..end];
+                    let plain = !content.contains(&b'\\');
+                    let text = std::str::from_utf8(content).ok()?;
+                    return Some((plain, text));
                 }
                 _ => self.i += 1,
             }
@@ -111,11 +84,49 @@ impl<'a> JsonScanner<'a> {
     }
 
     fn match_plain_string(&mut self, expected: &[u8]) -> Option<bool> {
-        self.scan_string(Some(expected))
+        self.scan_string()
+            .map(|(plain, content)| plain && content.as_bytes() == expected)
     }
 
     fn skip_string(&mut self) -> Option<()> {
-        self.scan_string(None).map(|_| ())
+        self.scan_string().map(|_| ())
+    }
+
+    fn plain_string(&mut self) -> Option<&'a str> {
+        self.scan_string()
+            .and_then(|(plain, content)| plain.then_some(content))
+    }
+
+    fn top_level_plain_string(&mut self, key: &[u8]) -> Option<&'a str> {
+        self.skip_ws();
+        if !self.eat(b'{') {
+            return None;
+        }
+
+        loop {
+            self.skip_ws();
+            if self.i >= self.bytes.len() || self.bytes[self.i] == b'}' {
+                return None;
+            }
+
+            let key_matches = self.match_plain_string(key)?;
+            self.skip_ws();
+            if !self.eat(b':') {
+                return None;
+            }
+            self.skip_ws();
+
+            if key_matches {
+                return self.plain_string();
+            }
+            self.skip_value()?;
+
+            self.skip_ws();
+            if self.i >= self.bytes.len() || self.bytes[self.i] != b',' {
+                return None;
+            }
+            self.i += 1;
+        }
     }
 
     fn skip_value(&mut self) -> Option<()> {
@@ -260,6 +271,47 @@ mod tests {
         ];
         for sample in samples {
             assert!(!is_channel_level3(sample), "{sample}");
+        }
+    }
+
+    #[test]
+    fn reads_message_type() {
+        let samples = [
+            (
+                r#"{"channel":"level3","type":"snapshot","data":[]}"#,
+                "snapshot",
+            ),
+            (
+                r#"{"channel":"level3","type":"update","data":[]}"#,
+                "update",
+            ),
+            (
+                r#"{"type":"update","channel":"level3","data":[]}"#,
+                "update",
+            ),
+            ("{\n  \"type\" : \"snapshot\"\n}", "snapshot"),
+            (r#"{"type":"snapshot","data":[}"#, "snapshot"),
+        ];
+        for (sample, expected) in samples {
+            assert_eq!(get_message_type(sample), expected, "{sample}");
+        }
+        assert_eq!(
+            get_message_type(&fixture("level3_snapshot.json")),
+            "snapshot"
+        );
+        assert_eq!(get_message_type(&fixture("level3_update_1.json")), "update");
+        assert_eq!(get_message_type(&fixture("level3_update_2.json")), "update");
+
+        let missing = [
+            "",
+            "{}",
+            r#"{"channel":"level3"}"#,
+            r#"{"data":{"type":"snapshot"}}"#,
+            r#"{"type":"\u0073napshot"}"#,
+            r#"{"type":""}"#,
+        ];
+        for sample in missing {
+            assert_eq!(get_message_type(sample), "", "{sample}");
         }
     }
 }

@@ -9,7 +9,7 @@ Single binary crate, edition 2024. Requires rustc 1.85+. Not a library and not a
 - `src/main.rs` — reads `KRAKEN_API_KEY` / `KRAKEN_API_SECRET`, spawns the reader and the updater on an unbounded `mpsc`
 - `src/kraken/mod.rs` — `mod json_utils; mod utils; pub mod level3; pub mod websockets;`
 - `src/kraken/websockets.rs` — REST token, connect, subscribe, forward `level3` text frames
-- `src/kraken/json_utils.rs` — channel checks: byte scan (`is_channel_level3`). Private module. The read loop uses the byte scan.
+- `src/kraken/json_utils.rs` — byte scans: `is_channel_level3` and `get_message_type`. Private module. The read loop uses the channel scan. `on_message` uses the type scan.
 - `src/kraken/level3.rs` — book types, mirror state machine, apply, checksum
 - `src/kraken/utils.rs` — REST HMAC (`get_signature`). Private module
 - `tests/data/` — offline fixtures: `level3_snapshot.json`, `level3_update_1.json`, `level3_update_2.json`, `btc_usd_stream.log`

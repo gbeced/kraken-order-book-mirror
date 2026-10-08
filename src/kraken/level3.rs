@@ -6,19 +6,6 @@ use std::error::Error;
 // https://docs.kraken.com/exchange/api-reference/spot-websocket-v2/level3
 
 #[derive(Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum Level3Kind {
-    Snapshot,
-    Update,
-}
-
-#[derive(Deserialize)]
-struct PeekMsg {
-    #[serde(rename = "type")]
-    kind: Level3Kind,
-}
-
-#[derive(Deserialize)]
 struct OrderBookMsg<TOrderBook> {
     data: Vec<TOrderBook>,
 }
@@ -191,23 +178,23 @@ impl OrderBookMirror {
     }
 
     pub fn on_message(&mut self, msg: &str) -> Result<(), Box<dyn Error>> {
-        let peek_msg = serde_json::from_str::<PeekMsg>(msg)?;
-
-        match peek_msg.kind {
-            Level3Kind::Snapshot => {
+        match super::json_utils::get_message_type(msg) {
+            "snapshot" => {
                 let snapshot_msg: OrderBookSnapshotMsg = serde_json::from_str(msg)?;
                 snapshot_msg
                     .data
                     .into_iter()
                     .try_for_each(|snapshot| self.state.on_snapshot(&self.context, snapshot))
             }
-            Level3Kind::Update => {
+            "update" => {
                 let update_msg: OrderBookUpdateMsg = serde_json::from_str(msg)?;
                 update_msg
                     .data
                     .into_iter()
                     .try_for_each(|update| self.state.on_update(&self.context, update))
             }
+            "" => Err("Missing message type".into()),
+            other => Err(format!("Unexpected message type: {other}").into()),
         }
     }
 
@@ -331,7 +318,7 @@ fn update_orders(
 mod tests {
     use super::*;
     use std::fs::File;
-    use std::io::{self, BufRead, BufReader};
+    use std::io::{BufRead, BufReader};
     use std::path::{Path, PathBuf};
     use uuid::Uuid;
 
