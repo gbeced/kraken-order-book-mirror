@@ -1,19 +1,21 @@
 mod kraken;
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use rust_decimal::Decimal;
 use std::env;
 use std::error::Error;
 use tokio::sync::mpsc;
 
 async fn obook_reader(sender: mpsc::UnboundedSender<String>) -> Result<(), String> {
-    let api_key = env::var("KRAKEN_API_KEY").map_err(|_| "KRAKEN_API_KEY must be set".to_string())?;
-    let api_secret = env::var("KRAKEN_API_SECRET").map_err(|_| "KRAKEN_API_SECRET must be set".to_string())?;
+    let api_key =
+        env::var("KRAKEN_API_KEY").map_err(|_| "KRAKEN_API_KEY must be set".to_string())?;
+    let api_secret =
+        env::var("KRAKEN_API_SECRET").map_err(|_| "KRAKEN_API_SECRET must be set".to_string())?;
     let channels = ["BTC/USD"];
 
     kraken::websockets::connect_and_dispatch_level3(&api_key, &api_secret, &channels, 100, sender)
-    .await
-    .map_err(|e| e.to_string())
+        .await
+        .map_err(|e| e.to_string())
 }
 
 async fn obook_updater(mut receiver: mpsc::UnboundedReceiver<String>) -> Result<(), String> {
@@ -38,7 +40,7 @@ async fn obook_updater(mut receiver: mpsc::UnboundedReceiver<String>) -> Result<
                         age.as_seconds_f32()
                     );
                 }
-            },
+            }
             Err(e) => {
                 return Err(e.to_string());
             }
@@ -49,7 +51,6 @@ async fn obook_updater(mut receiver: mpsc::UnboundedReceiver<String>) -> Result<
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-
     let (sender, receiver) = mpsc::unbounded_channel::<String>();
     let (reader_res, updater_res) = tokio::join!(
         tokio::spawn(obook_reader(sender)),

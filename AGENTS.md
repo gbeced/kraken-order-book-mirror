@@ -7,8 +7,9 @@ Single binary crate, edition 2024. Requires rustc 1.85+. Not a library and not a
 ## Layout
 
 - `src/main.rs` — reads `KRAKEN_API_KEY` / `KRAKEN_API_SECRET`, spawns the reader and the updater on an unbounded `mpsc`
-- `src/kraken/mod.rs` — `mod utils; pub mod level3; pub mod websockets;`
+- `src/kraken/mod.rs` — `mod json_utils; mod utils; pub mod level3; pub mod websockets;`
 - `src/kraken/websockets.rs` — REST token, connect, subscribe, forward `level3` text frames
+- `src/kraken/json_utils.rs` — channel checks: byte scan (`is_channel_level3`). Private module. The read loop uses the byte scan.
 - `src/kraken/level3.rs` — book types, mirror state machine, apply, checksum
 - `src/kraken/utils.rs` — REST HMAC (`get_signature`). Private module
 - `tests/data/` — offline fixtures: `level3_snapshot.json`, `level3_update_1.json`, `level3_update_2.json`, `btc_usd_stream.log`
@@ -16,7 +17,7 @@ Single binary crate, edition 2024. Requires rustc 1.85+. Not a library and not a
 
 There is no `tests/*.rs` integration crate, no CI, no README, and no `rustfmt.toml` / `clippy.toml` / `rust-toolchain.toml`. Unit tests live in `#[cfg(test)]` modules.
 
-`utils` is declared only in `kraken/mod.rs`. Sibling modules call `super::utils`. A compiler hint to add `mod utils` in `main.rs` is wrong.
+`json_utils` and `utils` are declared only in `kraken/mod.rs`. Sibling modules call `super::json_utils` and `super::utils`. A compiler hint to add either module in `main.rs` is wrong.
 
 ## Setup
 
@@ -36,7 +37,7 @@ The binary does not load `.env`. Export the variables yourself, or `set -a; sour
 | --- | --- |
 | `cargo check` | Typecheck |
 | `cargo build` | Debug build |
-| `cargo test` | Unit tests in `utils` and `level3`. No network |
+| `cargo test` | Unit tests in `json_utils`, `utils`, and `level3`. No network |
 | `cargo fmt` | rustfmt, default config |
 | `cargo clippy` | Lints, no project config |
 | `cargo run` | Long-running **live** client |
@@ -64,7 +65,7 @@ The binary does not load `.env`. Export the variables yourself, or `set -a; sour
    ```
 
    `OrderBookMirror::new` is called with the same depth (`100`). Those two depths must stay equal.
-5. `is_channel_level3` forwards only text that starts with `{"channel":"level3","type":"`. Heartbeat, status, and subscribe/unsubscribe acks are dropped. Acks nest `"channel":"level3"` under `result`, so a substring search false-matches them. There is a TODO on this prefix check. Leave it unless the task is to replace it.
+5. `json_utils::is_channel_level3` scans the top-level JSON object for a plain `channel` string equal to `level3`. When that key is first, the scan returns without walking `data`. Heartbeat, status, and subscribe/unsubscribe acks are dropped. Acks nest `"channel":"level3"` under `result` or `params`, and a nested value does not match.
 6. The updater calls `OrderBookMirror::on_message` and, when a book is present, prints the summary with `println!`. The first apply error returns from the updater task. Close or a read error returns from the reader. No reconnect and no token refresh.
 
 Kraken WebSocket tokens last about 15 minutes. `level3` requires a token and uses `wss://ws-l3.kraken.com/v2`. The public L2 `book` channel on `wss://ws.kraken.com/v2` is a different feed.

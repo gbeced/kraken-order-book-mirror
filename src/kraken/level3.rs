@@ -18,7 +18,6 @@ struct PeekMsg {
     kind: Level3Kind,
 }
 
-
 #[derive(Deserialize)]
 struct OrderBookMsg<TOrderBook> {
     data: Vec<TOrderBook>,
@@ -71,10 +70,10 @@ struct OrderBookUpdater {
     max_depth: usize,
     snapshot: OrderBookSnapshot,
 }
- 
+
 enum MirrorState {
     WaitingSnapshot,
-    WaitingUpdate {updater: OrderBookUpdater},
+    WaitingUpdate { updater: OrderBookUpdater },
     Invalid,
 }
 
@@ -86,7 +85,7 @@ pub struct OrderBookMirror {
     context: MirrorContext,
     state: MirrorState,
 }
- 
+
 impl OrderBookSnapshot {
     fn calculate_checksum(&self) -> u32 {
         // https://docs.kraken.com/exchange/guides/websockets/l3-checksum-v2
@@ -98,10 +97,11 @@ impl OrderBookSnapshot {
         let bid_count =
             find_price_level(&self.bids, CHECKSUM_PRICE_LEVELS).unwrap_or(self.bids.len());
 
-        let mut buff =
-            String::with_capacity((ask_count + bid_count) * 6 * 2);
+        let mut buff = String::with_capacity((ask_count + bid_count) * 6 * 2);
         for order in self
-            .asks.iter().take(ask_count)
+            .asks
+            .iter()
+            .take(ask_count)
             .chain(self.bids.iter().take(bid_count))
         {
             buff.push_str(&serialize_decimal(&order.limit_price));
@@ -127,19 +127,22 @@ impl OrderBookUpdater {
 
         let calculated = self.snapshot.calculate_checksum();
         if calculated != self.snapshot.checksum {
-            return Err(
-                format!(
-                    "Checksum mismatch after update. Calculated: {}. Update: {}",
-                    calculated, self.snapshot.checksum
-                ).into()
+            return Err(format!(
+                "Checksum mismatch after update. Calculated: {}. Update: {}",
+                calculated, self.snapshot.checksum
             )
+            .into());
         }
         Ok(())
     }
 }
 
 impl MirrorState {
-    fn on_snapshot(&mut self, context: &MirrorContext, snapshot: OrderBookSnapshot) -> Result<(), Box<dyn Error>> {
+    fn on_snapshot(
+        &mut self,
+        context: &MirrorContext,
+        snapshot: OrderBookSnapshot,
+    ) -> Result<(), Box<dyn Error>> {
         match self {
             MirrorState::WaitingSnapshot => {
                 *self = MirrorState::WaitingUpdate {
@@ -149,30 +152,32 @@ impl MirrorState {
                     },
                 };
                 Ok(())
-            },
+            }
             MirrorState::WaitingUpdate { .. } => {
                 *self = MirrorState::Invalid;
                 Err("Expected update but received snapshot".into())
-            },
-            MirrorState::Invalid => {
-                Err("Received snapshot in an invalid state".into())
-            },
+            }
+            MirrorState::Invalid => Err("Received snapshot in an invalid state".into()),
         }
     }
 
-    fn on_update(&mut self, _context: &MirrorContext, update: OrderBookUpdate) -> Result<(), Box<dyn Error>> {
+    fn on_update(
+        &mut self,
+        _context: &MirrorContext,
+        update: OrderBookUpdate,
+    ) -> Result<(), Box<dyn Error>> {
         match self {
             MirrorState::WaitingSnapshot => {
                 *self = MirrorState::Invalid;
                 Err("Expected snapshot but received update".into())
             }
-            MirrorState::WaitingUpdate { updater} => {
+            MirrorState::WaitingUpdate { updater } => {
                 updater.update(update).inspect_err(|_| {
                     // If update failed then the order book is now in an invalid state and we should drop it.
-                    *self =  MirrorState::Invalid;
+                    *self = MirrorState::Invalid;
                 })
-            },
-            MirrorState::Invalid => {Err("Received update in an invalid state".into())},
+            }
+            MirrorState::Invalid => Err("Received update in an invalid state".into()),
         }
     }
 }
@@ -185,33 +190,31 @@ impl OrderBookMirror {
         }
     }
 
-    pub fn on_message(& mut self, msg: &str) -> Result<(), Box<dyn Error>> {
+    pub fn on_message(&mut self, msg: &str) -> Result<(), Box<dyn Error>> {
         let peek_msg = serde_json::from_str::<PeekMsg>(msg)?;
 
         match peek_msg.kind {
             Level3Kind::Snapshot => {
                 let snapshot_msg: OrderBookSnapshotMsg = serde_json::from_str(msg)?;
-                snapshot_msg.data.into_iter().try_for_each(|snapshot| {
-                    self.state.on_snapshot(&self.context, snapshot)
-                })
-
+                snapshot_msg
+                    .data
+                    .into_iter()
+                    .try_for_each(|snapshot| self.state.on_snapshot(&self.context, snapshot))
             }
             Level3Kind::Update => {
                 let update_msg: OrderBookUpdateMsg = serde_json::from_str(msg)?;
-                update_msg.data.into_iter().try_for_each(|update| {
-                    self.state.on_update(&self.context, update)
-                })
-
+                update_msg
+                    .data
+                    .into_iter()
+                    .try_for_each(|update| self.state.on_update(&self.context, update))
             }
         }
     }
 
     pub fn get_order_book(&self) -> Option<&OrderBookSnapshot> {
         match self.state {
-            MirrorState::WaitingUpdate { ref updater } => {
-                Some(&updater.snapshot)
-            },
-            _ => {None}
+            MirrorState::WaitingUpdate { ref updater } => Some(&updater.snapshot),
+            _ => None,
         }
     }
 }
@@ -227,12 +230,13 @@ fn insert_order(orders: &mut Vec<Order>, event: OrderEvent, sort_asc: bool) {
     // Orders are sorted by limit_price (asc/desc) + timestamp(asc).
     let idx = orders.partition_point(|o| match sort_asc {
         true => {
-            o.limit_price < order.limit_price || o.limit_price == order.limit_price && o.timestamp < order.timestamp
-        },
+            o.limit_price < order.limit_price
+                || o.limit_price == order.limit_price && o.timestamp < order.timestamp
+        }
         false => {
-            o.limit_price > order.limit_price || o.limit_price == order.limit_price && o.timestamp < order.timestamp
-        },
-
+            o.limit_price > order.limit_price
+                || o.limit_price == order.limit_price && o.timestamp < order.timestamp
+        }
     });
     orders.insert(idx, order);
 }
@@ -242,21 +246,20 @@ fn remove_order(orders: &mut Vec<Order>, event: &OrderEvent, sort_asc: bool) -> 
     // We can't use the insertion point because the datetime of the event will be different.
     // We locate the price level begin using a binary search first.
     let mut price_level_begin = orders.partition_point(|o| match sort_asc {
-        true => { o.limit_price < event.limit_price },
-        false => { o.limit_price > event.limit_price },
+        true => o.limit_price < event.limit_price,
+        false => o.limit_price > event.limit_price,
     });
     // Do a linear search within the price level.
     while let Some(order) = orders.get(price_level_begin) {
         if order.order_id == event.order_id {
             orders.remove(price_level_begin);
             return true;
+        } else if order.limit_price != event.limit_price {
+            return false;
         }
-        else if order.limit_price != event.limit_price {
-            return false
-        }
-       price_level_begin += 1; 
+        price_level_begin += 1;
     }
-    return false;
+    false
 }
 
 fn find_price_level(orders: &[Order], level: usize) -> Option<usize> {
@@ -309,12 +312,12 @@ fn update_orders(
                 insert_order(orders, order_event, sort_asc);
             }
             EventType::Delete => {
-                if ! remove_order(orders, &order_event, sort_asc) {
+                if !remove_order(orders, &order_event, sort_asc) {
                     return Err(format!("Order not found {}", order_event.order_id).into());
                 }
             }
             EventType::Modify => {
-                if ! remove_order(orders, &order_event, sort_asc) {
+                if !remove_order(orders, &order_event, sort_asc) {
                     return Err(format!("Order not found {}", order_event.order_id).into());
                 }
                 insert_order(orders, order_event, sort_asc);
@@ -326,11 +329,11 @@ fn update_orders(
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
     use super::*;
-    use uuid::Uuid;
     use std::fs::File;
     use std::io::{self, BufRead, BufReader};
+    use std::path::{Path, PathBuf};
+    use uuid::Uuid;
 
     fn test_file_path(fname: &str) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -371,10 +374,8 @@ mod tests {
     #[test]
     fn find_price_levels() {
         // Load and check the snapshot.
-        let snapshot_msg: OrderBookSnapshotMsg = serde_json::from_str(
-            &read_test_file("level3_snapshot.json"),
-        )
-        .unwrap();
+        let snapshot_msg: OrderBookSnapshotMsg =
+            serde_json::from_str(&read_test_file("level3_snapshot.json")).unwrap();
         let snapshot = &snapshot_msg.data[0];
 
         assert_eq!(find_price_level(&snapshot.bids, 0), Some(0));
@@ -461,15 +462,28 @@ mod tests {
             symbol: String::from("BTC/USD"),
             checksum: 1913449638,
             timestamp: Utc::now(),
-            bids, asks,
+            bids,
+            asks,
         };
 
         assert_eq!(snapshot.asks.len(), 10);
         assert_eq!(snapshot.bids.len(), 10);
-        assert_eq!(snapshot.asks[9].limit_price, Decimal::from(first_ask) + Decimal::from(19));
-        assert_eq!(snapshot.asks[0].limit_price, Decimal::from(first_ask) + Decimal::from(10));
-        assert_eq!(snapshot.bids[0].limit_price, Decimal::from(first_bid) - Decimal::from(10));
-        assert_eq!(snapshot.bids[9].limit_price, Decimal::from(first_bid) - Decimal::from(19));
+        assert_eq!(
+            snapshot.asks[9].limit_price,
+            Decimal::from(first_ask) + Decimal::from(19)
+        );
+        assert_eq!(
+            snapshot.asks[0].limit_price,
+            Decimal::from(first_ask) + Decimal::from(10)
+        );
+        assert_eq!(
+            snapshot.bids[0].limit_price,
+            Decimal::from(first_bid) - Decimal::from(10)
+        );
+        assert_eq!(
+            snapshot.bids[9].limit_price,
+            Decimal::from(first_bid) - Decimal::from(19)
+        );
         assert_eq!(snapshot.calculate_checksum(), 1913449638);
 
         // This update should end up being ignored since all levels should get inserted past the end.
@@ -485,18 +499,34 @@ mod tests {
             symbol: String::from("BTC/USD"),
             checksum: 1913449638,
             timestamp: Utc::now(),
-            bids, asks,
+            bids,
+            asks,
         };
-        let mut updater = OrderBookUpdater{ max_depth: 10, snapshot };
+        let mut updater = OrderBookUpdater {
+            max_depth: 10,
+            snapshot,
+        };
         updater.update(update).unwrap();
         let snapshot = &updater.snapshot;
 
         assert_eq!(snapshot.asks.len(), 10);
         assert_eq!(snapshot.bids.len(), 10);
-        assert_eq!(snapshot.asks[9].limit_price, Decimal::from(first_ask) + Decimal::from(19));
-        assert_eq!(snapshot.asks[0].limit_price, Decimal::from(first_ask) + Decimal::from(10));
-        assert_eq!(snapshot.bids[0].limit_price, Decimal::from(first_bid) - Decimal::from(10));
-        assert_eq!(snapshot.bids[9].limit_price, Decimal::from(first_bid) - Decimal::from(19));
+        assert_eq!(
+            snapshot.asks[9].limit_price,
+            Decimal::from(first_ask) + Decimal::from(19)
+        );
+        assert_eq!(
+            snapshot.asks[0].limit_price,
+            Decimal::from(first_ask) + Decimal::from(10)
+        );
+        assert_eq!(
+            snapshot.bids[0].limit_price,
+            Decimal::from(first_bid) - Decimal::from(10)
+        );
+        assert_eq!(
+            snapshot.bids[9].limit_price,
+            Decimal::from(first_bid) - Decimal::from(19)
+        );
         assert_eq!(snapshot.calculate_checksum(), 1913449638);
 
         // This update should get the snapshot truncated since 5 levels should have been inserted right at the
@@ -513,17 +543,24 @@ mod tests {
             symbol: String::from("BTC/USD"),
             checksum: 3473600046,
             timestamp: Utc::now(),
-            bids, asks,
+            bids,
+            asks,
         };
         updater.update(update).unwrap();
         let snapshot = &updater.snapshot;
 
         assert_eq!(snapshot.asks.len(), 10);
         assert_eq!(snapshot.bids.len(), 10);
-        assert_eq!(snapshot.asks[9].limit_price, Decimal::from(first_ask) + Decimal::from(14));
+        assert_eq!(
+            snapshot.asks[9].limit_price,
+            Decimal::from(first_ask) + Decimal::from(14)
+        );
         assert_eq!(snapshot.asks[0].limit_price, Decimal::from(first_ask));
         assert_eq!(snapshot.bids[0].limit_price, Decimal::from(first_bid));
-        assert_eq!(snapshot.bids[9].limit_price, Decimal::from(first_bid) - Decimal::from(14));
+        assert_eq!(
+            snapshot.bids[9].limit_price,
+            Decimal::from(first_bid) - Decimal::from(14)
+        );
         assert_eq!(snapshot.calculate_checksum(), 3473600046);
     }
 
@@ -546,7 +583,10 @@ mod tests {
         let mut mirror = OrderBookMirror::new(10);
 
         assert_eq!(
-            mirror.on_message(&read_test_file("level3_update_1.json")).expect_err("Error expected").to_string(),
+            mirror
+                .on_message(&read_test_file("level3_update_1.json"))
+                .expect_err("Error expected")
+                .to_string(),
             "Expected snapshot but received update"
         );
     }
@@ -555,9 +595,14 @@ mod tests {
     fn mirror_processing_fails_with_update_expected() {
         let mut mirror = OrderBookMirror::new(10);
 
-        mirror.on_message(&read_test_file("level3_snapshot.json")).unwrap();
+        mirror
+            .on_message(&read_test_file("level3_snapshot.json"))
+            .unwrap();
         assert_eq!(
-            mirror.on_message(&read_test_file("level3_snapshot.json")).expect_err("Error expected").to_string(),
+            mirror
+                .on_message(&read_test_file("level3_snapshot.json"))
+                .expect_err("Error expected")
+                .to_string(),
             "Expected update but received snapshot"
         );
     }
@@ -568,7 +613,7 @@ mod tests {
         let mut reader = open_test_file("btc_usd_stream.log");
         let mut line = String::new();
 
-        while reader.read_line(& mut line).unwrap() > 0 {
+        while reader.read_line(&mut line).unwrap() > 0 {
             if line.len() > 0 {
                 mirror.on_message(&line).unwrap();
             }
@@ -591,10 +636,19 @@ mod tests {
             let event = build_order_event(Decimal::from_str_exact(value).unwrap());
             insert_order(&mut orders, event, true);
         }
-        assert_eq!(orders.get(0).unwrap().limit_price, Decimal::from_str_exact("0.5").unwrap());
-        assert_eq!(orders.get(2).unwrap().limit_price, Decimal::from_str_exact("1.5").unwrap());
-        assert_eq!(orders.get(4).unwrap().limit_price, Decimal::from_str_exact("3").unwrap());
-    
+        assert_eq!(
+            orders.get(0).unwrap().limit_price,
+            Decimal::from_str_exact("0.5").unwrap()
+        );
+        assert_eq!(
+            orders.get(2).unwrap().limit_price,
+            Decimal::from_str_exact("1.5").unwrap()
+        );
+        assert_eq!(
+            orders.get(4).unwrap().limit_price,
+            Decimal::from_str_exact("3").unwrap()
+        );
+
         // Remove the 2nd order.
         let order_to_delete = orders.get(2).unwrap();
         let event = OrderEvent {

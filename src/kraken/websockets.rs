@@ -7,6 +7,7 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tungstenite::client::IntoClientRequest;
 
+use super::json_utils;
 use super::utils;
 
 #[derive(Debug, Deserialize)]
@@ -17,7 +18,7 @@ struct ApiResponse<T> {
 
 #[derive(Debug, Deserialize)]
 struct TokenResult {
-    expires: u64,
+    // expires: u64,
     token: String,
 }
 
@@ -51,16 +52,12 @@ async fn get_websocket_auth_token(
     Ok(token_result)
 }
 
-fn is_channel_level3(msg: &str) -> bool {
-    // TODO: Fix this.
-    // Error prone, but at this level we just wan't to forward messages ASAP.
-    const PREFIX: &str = r#"{"channel":"level3","type":""#;
-    msg.starts_with(PREFIX)
-}
-
 pub async fn connect_and_dispatch_level3(
-    api_key: &str, api_secret: &str, channels: &[&str], depth: usize,
-    sender: mpsc::UnboundedSender<String>
+    api_key: &str,
+    api_secret: &str,
+    channels: &[&str],
+    depth: usize,
+    sender: mpsc::UnboundedSender<String>,
 ) -> Result<(), Box<dyn Error>> {
     let token = get_websocket_auth_token(api_key, api_secret).await?;
 
@@ -89,7 +86,7 @@ pub async fn connect_and_dispatch_level3(
         match msg {
             Ok(Message::Text(text)) => {
                 // println!("{text}");
-                if is_channel_level3(text.as_str()) {
+                if json_utils::is_channel_level3(text.as_str()) {
                     sender.send(text.to_string())?;
                 }
             }
