@@ -1,8 +1,9 @@
 mod kraken;
 
+use chrono::{DateTime, Utc};
+use rust_decimal::Decimal;
 use std::env;
 use std::error::Error;
-use rust_decimal::Decimal;
 use tokio::sync::mpsc;
 
 async fn obook_reader(sender: mpsc::UnboundedSender<String>) -> Result<(), String> {
@@ -25,14 +26,16 @@ async fn obook_updater(mut receiver: mpsc::UnboundedReceiver<String>) -> Result<
                     let v_asks: Decimal = snapshot.asks.iter().map(|o| o.order_qty).sum();
                     let v_bids: Decimal = snapshot.bids.iter().map(|o| o.order_qty).sum();
                     let obi = (v_bids - v_asks) / (v_bids + v_asks);
+                    let age = Utc::now() - snapshot.timestamp;
 
                     println!(
-                        "{} {}: ask {} bid {} obi {}",
+                        "{} {}: ask {} bid {} obi {} age {}",
                         snapshot.timestamp,
                         snapshot.symbol,
                         snapshot.asks[0].limit_price,
                         snapshot.bids[0].limit_price,
-                        obi,
+                        obi.round_dp(4),
+                        age.as_seconds_f32()
                     );
                 }
             },
