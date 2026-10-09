@@ -3,6 +3,8 @@ use rust_decimal::Decimal;
 use serde::Deserialize;
 use std::error::Error;
 
+use super::json_utils;
+
 // https://docs.kraken.com/exchange/api-reference/spot-websocket-v2/level3
 
 #[derive(Deserialize)]
@@ -178,7 +180,7 @@ impl OrderBookMirror {
     }
 
     pub fn on_message(&mut self, msg: &str) -> Result<(), Box<dyn Error>> {
-        match super::json_utils::get_message_type(msg) {
+        match json_utils::get_message_type(msg) {
             "snapshot" => {
                 let snapshot_msg: OrderBookSnapshotMsg = serde_json::from_str(msg)?;
                 snapshot_msg

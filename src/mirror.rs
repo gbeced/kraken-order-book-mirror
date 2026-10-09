@@ -1,0 +1,69 @@
+use chrono::Utc;
+use rust_decimal::Decimal;
+use std::env;
+use std::error::Error;
+use tokio::sync::mpsc;
+
+use crate::kraken;
+
+async fn obook_reader(sender: mpsc::UnboundedSender<String>, max_depth: usize) -> Result<(), String> {
+    let api_key =
+        env::var("KRAKEN_API_KEY").map_err(|_| "KRAKEN_API_KEY must be set".to_string())?;
+    let api_secret =
+        env::var("KRAKEN_API_SECRET").map_err(|_| "KRAKEN_API_SECRET must be set".to_string())?;
+    let channels = ["BTC/USD"];
+
+    kraken::websockets::connect_and_dispatch_level3(&api_key, &api_secret, &channels, max_depth, sender)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+async fn obook_updater(mut receiver: mpsc::UnboundedReceiver<String>, max_depth: usize) -> Result<(), String> {
+    let mut mirror = kraken::level3::OrderBookMirror::new(max_depth);
+
+    while let Some(msg) = receiver.recv().await {
+        match mirror.on_message(&msg) {
+            Ok(_) => {
+                if let Some(snapshot) = mirror.get_order_book() {
+                    let v_asks: Decimal = snapshot.asks.iter().map(|o| o.order_qty).sum();
+                    let v_bids: Decimal = snapshot.bids.iter().map(|o| o.order_qty).sum();
+                    let obi = (v_bids - v_asks) / (v_bids + v_asks);
+                    let age = Utc::now() - snapshot.timestamp;
+
+                    println!(
+                        "{} {}: ask {} bid {} obi {} age {}",
+                        snapshot.timestamp,
+                        snapshot.symbol,
+                        snapshot.asks[0].limit_price,
+                        snapshot.bids[0].limit_price,
+                        obi.round_dp(4),
+                        age.as_seconds_f32()
+                    );
+                }
+            }
+            Err(e) => {
+                return Err(e.to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::main]
+pub async fn run() -> Result<(), Box<dyn Error>> {
+    let max_depth: usize = 100;
+    let (sender, receiver) = mpsc::unbounded_channel::<String>();
+    let (reader_res, updater_res) = tokio::join!(
+        tokio::spawn(obook_reader(sender, max_depth)),
+        tokio::spawn(obook_updater(receiver, max_depth)),
+    );
+
+    if let Err(e) = reader_res? {
+        eprintln!("Error in reader: {e}");
+    }
+    if let Err(e) = updater_res? {
+        eprintln!("Error in updater: {e}");
+    }
+
+    Ok(())
+}

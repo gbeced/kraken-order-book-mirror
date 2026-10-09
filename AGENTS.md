@@ -1,12 +1,13 @@
 # rust-order-book-mirror
 
-Tokio binary that authenticates to Kraken, subscribes to the WebSocket v2 `level3` channel, and maintains a local order-by-order book. `main` prints one summary line per applied frame (best bid/ask, order-book imbalance, age). The book stays in memory for the process lifetime. The binary does not send orders.
+Tokio binary that authenticates to Kraken, subscribes to the WebSocket v2 `level3` channel, and maintains a local order-by-order book. `mirror::obook_updater` prints one summary line per applied frame (best bid/ask, order-book imbalance, age). The book stays in memory for the process lifetime. The binary does not send orders.
 
 Single binary crate, edition 2024. Requires rustc 1.85+. Not a library and not a monorepo.
 
 ## Layout
 
-- `src/main.rs` — reads `KRAKEN_API_KEY` / `KRAKEN_API_SECRET`, spawns the reader and the updater on an unbounded `mpsc`
+- `src/main.rs` — declares `bench`, `kraken`, and `mirror`. A `bench` argument runs `bench::run()`. Otherwise `mirror::run()`.
+- `src/mirror.rs` — reads `KRAKEN_API_KEY` / `KRAKEN_API_SECRET`, spawns the reader and the updater on an unbounded `mpsc`
 - `src/kraken/mod.rs` — `mod json_utils; mod utils; pub mod level3; pub mod websockets;`
 - `src/kraken/websockets.rs` — REST token, connect, subscribe, forward `level3` text frames
 - `src/kraken/json_utils.rs` — byte scans: `is_channel_level3` and `get_message_type`. Private module. The read loop uses the channel scan. `on_message` uses the type scan.
@@ -15,7 +16,7 @@ Single binary crate, edition 2024. Requires rustc 1.85+. Not a library and not a
 - `tests/data/` — offline fixtures: `level3_snapshot.json`, `level3_update_1.json`, `level3_update_2.json`, `btc_usd_stream.log`
 - `Cargo.toml` / `Cargo.lock` — crate `rust-order-book-mirror`
 
-There is no `tests/*.rs` integration crate, no CI, no README, and no `rustfmt.toml` / `clippy.toml` / `rust-toolchain.toml`. Unit tests live in `#[cfg(test)]` modules.
+There is no `tests/*.rs` integration crate, no CI, and no `rustfmt.toml` / `clippy.toml` / `rust-toolchain.toml`. Unit tests live in `#[cfg(test)]` modules. `README.md` only documents how to run the live client and the bench.
 
 `json_utils` and `utils` are declared only in `kraken/mod.rs`. Sibling modules call `super::json_utils` and `super::utils`. A compiler hint to add either module in `main.rs` is wrong.
 
@@ -46,10 +47,10 @@ The binary does not load `.env`. Export the variables yourself, or `set -a; sour
 
 ## Runtime
 
-1. `main` reads the two env vars and joins two tasks. The reader sends raw `level3` text frames. The updater owns `OrderBookMirror`.
+1. `mirror::run` reads the two env vars and joins two tasks. The reader sends raw `level3` text frames. The updater owns `OrderBookMirror`.
 2. Token: POST `https://api.kraken.com/0/private/GetWebSocketsToken`. Body is the hand-built form `nonce={nonce}`. `utils::get_signature` is SHA256 of `nonce` concatenated with that body, then HMAC-SHA512 of `url_path || sha256` using the base64-decoded API secret. Headers are `API-Key` and `API-Sign` (base64 HMAC). `TokenResult.expires` is deserialized and unused.
 3. Connect to `wss://ws-l3.kraken.com/v2` (native-tls via tokio-tungstenite). Tungstenite answers WebSocket ping itself. The read loop ignores non-text messages.
-4. Subscribe. Symbol, depth, and snapshot are hardcoded in `main`:
+4. Subscribe. Symbol `BTC/USD` and depth `100` are hardcoded in `mirror.rs`. The reader and the updater both receive that depth. `snapshot: true` is hardcoded in `src/kraken/websockets.rs`:
 
    ```json
    {
@@ -102,7 +103,7 @@ The checksum hashes every order on the top 10 price levels per side (asks, then 
 ## Conventions
 
 - Match surrounding style (4-space indent). `eprintln!` for errors, `println!` for the summary line.
-- Keep `main.rs` as the env/entry wrapper. Kraken protocol code stays under `src/kraken/`.
+- Keep `main.rs` as the dispatch entry. The live session stays in `mirror.rs`. Kraken protocol code stays under `src/kraken/`.
 - New tests: `#[cfg(test)]` next to the code. Fixtures go in `tests/data/` and are read via `CARGO_MANIFEST_DIR`. No live network. No real API keys in fixtures.
 - `get_websocket_auth_token` builds the form body by hand. Leave that as it is unless the task is the auth request.
 
