@@ -3,8 +3,6 @@ use rust_decimal::Decimal;
 use serde::Deserialize;
 use std::error::Error;
 
-use super::json_utils;
-
 // https://docs.kraken.com/exchange/api-reference/spot-websocket-v2/level3
 
 #[derive(Deserialize)]
@@ -180,23 +178,14 @@ impl OrderBookMirror {
     }
 
     pub fn on_message(&mut self, msg: &str) -> Result<(), Box<dyn Error>> {
-        match json_utils::get_message_type(msg) {
-            "snapshot" => {
-                let snapshot_msg: OrderBookSnapshotMsg = serde_json::from_str(msg)?;
-                snapshot_msg
-                    .data
-                    .into_iter()
-                    .try_for_each(|snapshot| self.state.on_snapshot(&self.context, snapshot))
-            }
-            "update" => {
-                let update_msg: OrderBookUpdateMsg = serde_json::from_str(msg)?;
-                update_msg
-                    .data
-                    .into_iter()
-                    .try_for_each(|update| self.state.on_update(&self.context, update))
-            }
-            "" => Err("Missing message type".into()),
-            other => Err(format!("Unexpected message type: {other}").into()),
+        if let Ok(update_msg) = serde_json::from_str::<OrderBookUpdateMsg>(msg) {
+            self.process_update(update_msg)
+        }
+        else if let Ok(snapshot_msg) = serde_json::from_str::<OrderBookSnapshotMsg>(msg){
+            self.process_snapshot(snapshot_msg)
+        }
+        else {
+            Err("Unexpected message".into())
         }
     }
 
@@ -205,6 +194,21 @@ impl OrderBookMirror {
             MirrorState::WaitingUpdate { ref updater } => Some(&updater.snapshot),
             _ => None,
         }
+    }
+
+    #[cold]
+    fn process_snapshot(&mut self, snapshot_msg: OrderBookSnapshotMsg) -> Result<(), Box<dyn Error>> {
+        snapshot_msg
+            .data
+            .into_iter()
+            .try_for_each(|snapshot| self.state.on_snapshot(&self.context, snapshot))
+    }
+
+    fn process_update(&mut self, update_msg: OrderBookUpdateMsg) -> Result<(), Box<dyn Error>> {
+        update_msg
+            .data
+            .into_iter()
+            .try_for_each(|update| self.state.on_update(&self.context, update))
     }
 }
 
