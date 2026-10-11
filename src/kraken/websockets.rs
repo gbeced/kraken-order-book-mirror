@@ -55,7 +55,7 @@ async fn get_websocket_auth_token(
 pub async fn connect_and_dispatch_level3(
     api_key: &str,
     api_secret: &str,
-    channels: &[&str],
+    channel: &str,
     depth: usize,
     sender: mpsc::UnboundedSender<String>,
 ) -> Result<(), Box<dyn Error>> {
@@ -72,7 +72,7 @@ pub async fn connect_and_dispatch_level3(
         "params": {
             "channel": "level3",
             "depth": depth,
-            "symbol": channels,
+            "symbol": [channel],
             "snapshot": true,
             "token": token.token
         }

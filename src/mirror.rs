@@ -6,19 +6,17 @@ use tokio::sync::mpsc;
 
 use crate::kraken;
 
-async fn obook_reader(sender: mpsc::UnboundedSender<String>, max_depth: usize) -> Result<(), String> {
-    let api_key =
-        env::var("KRAKEN_API_KEY").map_err(|_| "KRAKEN_API_KEY must be set".to_string())?;
-    let api_secret =
-        env::var("KRAKEN_API_SECRET").map_err(|_| "KRAKEN_API_SECRET must be set".to_string())?;
-    let channels = ["BTC/USD"];
 
-    kraken::websockets::connect_and_dispatch_level3(&api_key, &api_secret, &channels, max_depth, sender)
+async fn obook_reader(
+    api_key: String, api_secret: String, channel: &str, max_depth: usize,
+    sender: mpsc::UnboundedSender<String>
+) -> Result<(), String> {
+    kraken::websockets::connect_and_dispatch_level3(&api_key, &api_secret, channel, max_depth, sender)
         .await
         .map_err(|e| e.to_string())
 }
 
-async fn obook_updater(mut receiver: mpsc::UnboundedReceiver<String>, max_depth: usize) -> Result<(), String> {
+async fn obook_updater(max_depth: usize, mut receiver: mpsc::UnboundedReceiver<String>) -> Result<(), String> {
     let mut mirror = kraken::level3::OrderBookMirror::new(max_depth);
 
     while let Some(msg) = receiver.recv().await {
@@ -51,11 +49,17 @@ async fn obook_updater(mut receiver: mpsc::UnboundedReceiver<String>, max_depth:
 
 #[tokio::main]
 pub async fn run() -> Result<(), Box<dyn Error>> {
-    let max_depth: usize = 100;
+    let api_key =
+        env::var("KRAKEN_API_KEY").map_err(|_| "KRAKEN_API_KEY must be set".to_string())?;
+    let api_secret =
+        env::var("KRAKEN_API_SECRET").map_err(|_| "KRAKEN_API_SECRET must be set".to_string())?;
+    let channel = "BTC/USD";
+    let max_depth = 100;
+
     let (sender, receiver) = mpsc::unbounded_channel::<String>();
     let (reader_res, updater_res) = tokio::join!(
-        tokio::spawn(obook_reader(sender, max_depth)),
-        tokio::spawn(obook_updater(receiver, max_depth)),
+        tokio::spawn(obook_reader(api_key, api_secret, channel, max_depth, sender)),
+        tokio::spawn(obook_updater(max_depth, receiver)),
     );
 
     if let Err(e) = reader_res? {
