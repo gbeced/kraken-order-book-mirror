@@ -180,11 +180,9 @@ impl OrderBookMirror {
     pub fn on_message(&mut self, msg: &str) -> Result<(), Box<dyn Error>> {
         if let Ok(update_msg) = serde_json::from_str::<OrderBookUpdateMsg>(msg) {
             self.process_update(update_msg)
-        }
-        else if let Ok(snapshot_msg) = serde_json::from_str::<OrderBookSnapshotMsg>(msg){
+        } else if let Ok(snapshot_msg) = serde_json::from_str::<OrderBookSnapshotMsg>(msg) {
             self.process_snapshot(snapshot_msg)
-        }
-        else {
+        } else {
             Err("Unexpected message".into())
         }
     }
@@ -197,7 +195,10 @@ impl OrderBookMirror {
     }
 
     #[cold]
-    fn process_snapshot(&mut self, snapshot_msg: OrderBookSnapshotMsg) -> Result<(), Box<dyn Error>> {
+    fn process_snapshot(
+        &mut self,
+        snapshot_msg: OrderBookSnapshotMsg,
+    ) -> Result<(), Box<dyn Error>> {
         snapshot_msg
             .data
             .into_iter()

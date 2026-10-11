@@ -6,7 +6,8 @@ use std::error::Error;
 
 pub fn main() -> Result<(), Box<dyn Error>> {
     if std::env::args().nth(1).as_deref() == Some("bench") {
-        return bench::run();
+        bench::run()
+    } else {
+        mirror::run()
     }
-    return mirror::run();
 }

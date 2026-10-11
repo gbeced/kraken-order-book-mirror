@@ -6,17 +6,28 @@ use tokio::sync::mpsc;
 
 use crate::kraken;
 
-
 async fn obook_reader(
-    api_key: String, api_secret: String, channel: &str, max_depth: usize,
-    sender: mpsc::UnboundedSender<String>
+    api_key: String,
+    api_secret: String,
+    channel: &str,
+    max_depth: usize,
+    sender: mpsc::UnboundedSender<String>,
 ) -> Result<(), String> {
-    kraken::websockets::connect_and_dispatch_level3(&api_key, &api_secret, channel, max_depth, sender)
-        .await
-        .map_err(|e| e.to_string())
+    kraken::websockets::connect_and_dispatch_level3(
+        &api_key,
+        &api_secret,
+        channel,
+        max_depth,
+        sender,
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
-async fn obook_updater(max_depth: usize, mut receiver: mpsc::UnboundedReceiver<String>) -> Result<(), String> {
+async fn obook_updater(
+    max_depth: usize,
+    mut receiver: mpsc::UnboundedReceiver<String>,
+) -> Result<(), String> {
     let mut mirror = kraken::level3::OrderBookMirror::new(max_depth);
 
     while let Some(msg) = receiver.recv().await {
@@ -58,7 +69,9 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
 
     let (sender, receiver) = mpsc::unbounded_channel::<String>();
     let (reader_res, updater_res) = tokio::join!(
-        tokio::spawn(obook_reader(api_key, api_secret, channel, max_depth, sender)),
+        tokio::spawn(obook_reader(
+            api_key, api_secret, channel, max_depth, sender
+        )),
         tokio::spawn(obook_updater(max_depth, receiver)),
     );
 
