@@ -12,7 +12,7 @@ struct OrderBookMsg<TOrderBook> {
 
 #[derive(Deserialize, Debug)]
 pub struct OrderBook<TOrder> {
-    pub symbol: String,
+    // pub symbol: String,
     pub checksum: u32,
     pub timestamp: DateTime<Utc>,
     pub bids: Vec<TOrder>,
@@ -453,7 +453,6 @@ mod tests {
             .map(|i| build_order(first_ask + Decimal::from(i)))
             .collect();
         let snapshot = OrderBookSnapshot {
-            symbol: String::from("BTC/USD"),
             checksum: 1913449638,
             timestamp: Utc::now(),
             bids,
@@ -490,7 +489,6 @@ mod tests {
             .map(|i| build_order_event(first_ask + Decimal::from(i)))
             .collect();
         let update = OrderBookUpdate {
-            symbol: String::from("BTC/USD"),
             checksum: 1913449638,
             timestamp: Utc::now(),
             bids,
@@ -534,7 +532,6 @@ mod tests {
             .map(|i| build_order_event(first_ask + Decimal::from(i)))
             .collect();
         let update = OrderBookUpdate {
-            symbol: String::from("BTC/USD"),
             checksum: 3473600046,
             timestamp: Utc::now(),
             bids,

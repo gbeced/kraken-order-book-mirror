@@ -25,6 +25,7 @@ async fn obook_reader(
 }
 
 async fn obook_updater(
+    channel: &str,
     max_depth: usize,
     mut receiver: mpsc::UnboundedReceiver<String>,
 ) -> Result<(), String> {
@@ -42,7 +43,7 @@ async fn obook_updater(
                     println!(
                         "{} {}: ask {} bid {} obi {} age {}",
                         snapshot.timestamp,
-                        snapshot.symbol,
+                        channel,
                         snapshot.asks[0].limit_price,
                         snapshot.bids[0].limit_price,
                         obi.round_dp(4),
@@ -72,7 +73,7 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
         tokio::spawn(obook_reader(
             api_key, api_secret, channel, max_depth, sender
         )),
-        tokio::spawn(obook_updater(max_depth, receiver)),
+        tokio::spawn(obook_updater(channel, max_depth, receiver)),
     );
 
     if let Err(e) = reader_res? {
