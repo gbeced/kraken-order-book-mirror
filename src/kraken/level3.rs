@@ -235,25 +235,66 @@ fn insert_order(orders: &mut Vec<Order>, event: OrderEvent, sort_asc: bool) {
     orders.insert(idx, order);
 }
 
-fn remove_order(orders: &mut Vec<Order>, event: &OrderEvent, sort_asc: bool) -> bool {
+fn find_order<'a>(
+    orders: &'a mut [Order],
+    event: &OrderEvent,
+    sort_asc: bool,
+) -> Option<(usize, &'a mut Order)> {
     // Orders are sorted by limit_price (asc/desc) + timestamp(asc).
-    // We can't use the insertion point because the datetime of the event will be different.
-    // We locate the price level begin using a binary search first.
-    let mut price_level_begin = orders.partition_point(|o| match sort_asc {
+    // First we locate the price level using a binary search first.
+    let idx = orders.partition_point(|o| match sort_asc {
         true => o.limit_price < event.limit_price,
         false => o.limit_price > event.limit_price,
     });
-    // Do a linear search within the price level.
-    while let Some(order) = orders.get(price_level_begin) {
+    // Then we do a linear search within the price level.
+    for (idx, order) in (idx..).zip(orders.iter_mut().skip(idx)) {
         if order.order_id == event.order_id {
-            orders.remove(price_level_begin);
-            return true;
+            return Some((idx, order));
         } else if order.limit_price != event.limit_price {
-            return false;
+            return None;
         }
-        price_level_begin += 1;
     }
-    false
+    None
+}
+
+fn modify_order(orders: &mut Vec<Order>, event: OrderEvent, sort_asc: bool) -> bool {
+    if let Some((mut idx, order)) = find_order(orders, &event, sort_asc) {
+        if order.timestamp == event.timestamp {
+            // Update the qty in place.
+            order.order_qty = event.order_qty;
+        } else {
+            // Remove the order and continue doing a linear search for the insertion point within the price level, or
+            // at the end of it.
+            assert!(event.timestamp > order.timestamp);
+            orders.remove(idx);
+            for order in orders.iter().skip(idx) {
+                if event.timestamp < order.timestamp || order.limit_price != event.limit_price {
+                    break;
+                }
+                idx += 1;
+            }
+
+            let order = Order {
+                order_id: event.order_id,
+                limit_price: event.limit_price,
+                order_qty: event.order_qty,
+                timestamp: event.timestamp,
+            };
+            orders.insert(idx, order);
+        }
+        true
+    } else {
+        false
+    }
+}
+
+fn remove_order(orders: &mut Vec<Order>, event: &OrderEvent, sort_asc: bool) -> bool {
+    if let Some((idx, _)) = find_order(orders, event, sort_asc) {
+        orders.remove(idx);
+        true
+    } else {
+        false
+    }
 }
 
 fn find_price_level(orders: &[Order], level: usize) -> Option<usize> {
@@ -302,19 +343,21 @@ fn update_orders(
 ) -> Result<(), Box<dyn Error>> {
     for order_event in order_events {
         match order_event.event {
+            // A new order added to the book.
             EventType::Add => {
                 insert_order(orders, order_event, sort_asc);
             }
+            // The order has been removed from the book, i.e. full fill or cancel.
             EventType::Delete => {
                 if !remove_order(orders, &order_event, sort_asc) {
                     return Err(format!("Order not found {}", order_event.order_id).into());
                 }
             }
+            // The order quantity has been modified, i.e. a fill.
             EventType::Modify => {
-                if !remove_order(orders, &order_event, sort_asc) {
-                    return Err(format!("Order not found {}", order_event.order_id).into());
+                if !modify_order(orders, order_event, sort_asc) {
+                    return Err("Order not found".into());
                 }
-                insert_order(orders, order_event, sort_asc);
             }
         }
     }
