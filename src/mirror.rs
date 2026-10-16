@@ -34,22 +34,21 @@ async fn obook_updater(
     while let Some(msg) = receiver.recv().await {
         match mirror.on_message(&msg) {
             Ok(_) => {
-                if let Some(snapshot) = mirror.get_order_book() {
-                    let v_asks: Decimal = snapshot.asks.iter().map(|o| o.order_qty).sum();
-                    let v_bids: Decimal = snapshot.bids.iter().map(|o| o.order_qty).sum();
-                    let obi = (v_bids - v_asks) / (v_bids + v_asks);
-                    let age = Utc::now() - snapshot.timestamp;
+                let ob = mirror.get_order_book().expect("No order book");
+                let v_asks: Decimal = ob.asks.iter().map(|o| o.order_qty).sum();
+                let v_bids: Decimal = ob.bids.iter().map(|o| o.order_qty).sum();
+                let obi = (v_bids - v_asks) / (v_bids + v_asks);
+                let age = Utc::now() - ob.timestamp;
 
-                    println!(
-                        "{} {}: ask {} bid {} obi {} age {}",
-                        snapshot.timestamp,
-                        channel,
-                        snapshot.asks[0].limit_price,
-                        snapshot.bids[0].limit_price,
-                        obi.round_dp(4),
-                        age.as_seconds_f32()
-                    );
-                }
+                println!(
+                    "{} {}: ask {} bid {} obi {} age {}",
+                    ob.timestamp,
+                    channel,
+                    ob.asks[0].limit_price,
+                    ob.bids[0].limit_price,
+                    obi.round_dp(4),
+                    age.as_seconds_f32()
+                );
             }
             Err(e) => {
                 return Err(e.to_string());

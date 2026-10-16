@@ -2,21 +2,22 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::Deserialize;
 use std::error::Error;
+use std::ops::Index;
 
 // https://docs.kraken.com/exchange/api-reference/spot-websocket-v2/level3
 
 #[derive(Deserialize)]
-struct OrderBookMsg<TOrderBook> {
-    data: Vec<TOrderBook>,
+struct Envelope<T> {
+    data: Vec<T>,
 }
 
 #[derive(Deserialize, Debug)]
-pub struct OrderBook<TOrder> {
-    // pub symbol: String,
-    pub checksum: u32,
-    pub timestamp: DateTime<Utc>,
-    pub bids: Vec<TOrder>,
-    pub asks: Vec<TOrder>,
+struct Payload<T> {
+    // symbol: String,
+    checksum: u32,
+    timestamp: DateTime<Utc>,
+    bids: Vec<T>,
+    asks: Vec<T>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -48,14 +49,26 @@ struct OrderEvent {
     event: EventType,
 }
 
-type OrderBookSnapshot = OrderBook<Order>;
-type OrderBookUpdate = OrderBook<OrderEvent>;
-type OrderBookSnapshotMsg = OrderBookMsg<OrderBookSnapshot>;
-type OrderBookUpdateMsg = OrderBookMsg<OrderBookUpdate>;
+type Snapshot = Payload<Order>;
+type Update = Payload<OrderEvent>;
+type SnapshotMsg = Envelope<Snapshot>;
+type UpdateMsg = Envelope<Update>;
+
+// Orders are sorted by limit_price (asc/desc) + timestamp(asc).
+pub struct Orders {
+    orders: Vec<Order>,
+    sort_asc: bool,
+}
+
+pub struct OrderBook {
+    pub asks: Orders,
+    pub bids: Orders,
+    pub timestamp: DateTime<Utc>,
+}
 
 struct OrderBookUpdater {
+    order_book: OrderBook,
     max_depth: usize,
-    snapshot: OrderBookSnapshot,
 }
 
 enum MirrorState {
@@ -73,18 +86,177 @@ pub struct OrderBookMirror {
     state: MirrorState,
 }
 
-impl OrderBookSnapshot {
+impl Order {
+    fn from_event(event: OrderEvent) -> Order {
+        Order {
+            order_id: event.order_id,
+            limit_price: event.limit_price,
+            order_qty: event.order_qty,
+            timestamp: event.timestamp,
+        }
+    }
+}
+
+impl Orders {
+    pub fn len(&self) -> usize {
+        self.orders.len()
+    }
+
+    pub fn iter<'a>(&'a self) -> std::slice::Iter<'a, Order> {
+        self.orders.iter()
+    }
+
+    fn insert_order(&mut self, order: Order) {
+        let idx = self.orders.partition_point(|o| match self.sort_asc {
+            true => {
+                o.limit_price < order.limit_price
+                    || o.limit_price == order.limit_price && o.timestamp < order.timestamp
+            }
+            false => {
+                o.limit_price > order.limit_price
+                    || o.limit_price == order.limit_price && o.timestamp < order.timestamp
+            }
+        });
+        self.orders.insert(idx, order);
+    }
+
+    fn remove_order(&mut self, order_id: &str, limit_price: Decimal) -> bool {
+        if let Some((idx, _)) = self.find_order(order_id, limit_price) {
+            self.orders.remove(idx);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn find_order<'a>(
+        &'a mut self,
+        order_id: &str,
+        limit_price: Decimal,
+    ) -> Option<(usize, &'a mut Order)> {
+        // Orders are sorted by limit_price (asc/desc) + timestamp(asc).
+        // First we locate the price level using a binary search first.
+        let idx = self.orders.partition_point(|o| match self.sort_asc {
+            true => o.limit_price < limit_price,
+            false => o.limit_price > limit_price,
+        });
+        // Then we do a linear search within the price level.
+        for (idx, order) in (idx..).zip(self.orders.iter_mut().skip(idx)) {
+            if order.order_id == order_id {
+                return Some((idx, order));
+            } else if order.limit_price != limit_price {
+                return None;
+            }
+        }
+        None
+    }
+
+    fn modify_order(&mut self, order: Order) -> bool {
+        if let Some((mut idx, prev_order)) = self.find_order(&order.order_id, order.limit_price) {
+            if prev_order.timestamp == order.timestamp {
+                // Update the qty in place.
+                prev_order.order_qty = order.order_qty;
+            } else {
+                // Remove the order and continue doing a linear search for the insertion point within the price level, or
+                // at the end of it.
+                assert!(order.timestamp > prev_order.timestamp);
+                self.orders.remove(idx);
+                for existing in self.orders.iter().skip(idx) {
+                    if order.timestamp < existing.timestamp
+                        || existing.limit_price != order.limit_price
+                    {
+                        break;
+                    }
+                    idx += 1;
+                }
+
+                self.orders.insert(idx, order);
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    fn apply_events(&mut self, events: Vec<OrderEvent>) -> Result<(), Box<dyn Error>> {
+        for event in events {
+            match event.event {
+                // A new order added to the book.
+                EventType::Add => {
+                    self.insert_order(Order::from_event(event));
+                }
+                // The order has been removed from the book, i.e. full fill or cancel.
+                EventType::Delete => {
+                    if !self.remove_order(&event.order_id, event.limit_price) {
+                        return Err(format!("Order not found {}", event.order_id).into());
+                    }
+                }
+                // The order quantity has been modified, i.e. a fill.
+                EventType::Modify => {
+                    if !self.modify_order(Order::from_event(event)) {
+                        return Err("Order not found".into());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn find_price_level(&self, level: usize) -> Option<usize> {
+        // Returns the position for the 1st order at the given price level.
+
+        if level >= self.orders.len() {
+            return None;
+        }
+
+        // Find the price leel.
+        let mut price_level: (Decimal, usize) = (self.orders[0].limit_price, 0);
+        for (index, order) in self.orders.iter().enumerate() {
+            if order.limit_price != price_level.0 {
+                // Update the price level.
+                price_level.0 = order.limit_price;
+                price_level.1 += 1;
+            }
+            // Stop once we reached the price level.
+            if price_level.1 == level {
+                return Some(index);
+            }
+        }
+        None
+    }
+
+    fn truncate_price_level(&mut self, max_levels: usize) {
+        // Truncates orders leaving only the first max_levels.
+        if let Some(truncate_pos) = self.find_price_level(max_levels) {
+            self.orders.drain(truncate_pos..);
+        }
+    }
+}
+
+impl Index<usize> for Orders {
+    type Output = Order;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.orders[index]
+    }
+}
+
+impl OrderBook {
     fn calculate_checksum(&self) -> u32 {
         // https://docs.kraken.com/exchange/guides/websockets/l3-checksum-v2
-
-        // Kraken always hashes the top 10 price levels, whatever depth was subscribed.
+        // Kraken hashes only the top 10 price levels for the checksum.
         const CHECKSUM_PRICE_LEVELS: usize = 10;
-        let ask_count =
-            find_price_level(&self.asks, CHECKSUM_PRICE_LEVELS).unwrap_or(self.asks.len());
-        let bid_count =
-            find_price_level(&self.bids, CHECKSUM_PRICE_LEVELS).unwrap_or(self.bids.len());
+        let ask_count = self
+            .asks
+            .find_price_level(CHECKSUM_PRICE_LEVELS)
+            .unwrap_or(self.asks.len());
+        let bid_count = self
+            .bids
+            .find_price_level(CHECKSUM_PRICE_LEVELS)
+            .unwrap_or(self.bids.len());
+        // 10 bytes per value, 2 values (price and quantity).
+        let mut buff = String::with_capacity((ask_count + bid_count) * 10 * 2);
 
-        let mut buff = String::with_capacity((ask_count + bid_count) * 6 * 2);
         for order in self
             .asks
             .iter()
@@ -99,28 +271,46 @@ impl OrderBookSnapshot {
 }
 
 impl OrderBookUpdater {
-    fn update(&mut self, update: OrderBookUpdate) -> Result<(), Box<dyn Error>> {
-        if self.snapshot.timestamp > update.timestamp {
-            return Err("Update is old".into());
+    fn new(snapshot: Snapshot, max_depth: usize) -> OrderBookUpdater {
+        let asks = Orders {
+            orders: snapshot.asks,
+            sort_asc: true,
+        };
+        let bids = Orders {
+            orders: snapshot.bids,
+            sort_asc: false,
+        };
+        let order_book = OrderBook {
+            asks,
+            bids,
+            timestamp: snapshot.timestamp,
+        };
+        OrderBookUpdater {
+            order_book,
+            max_depth,
         }
+    }
 
+    fn update(&mut self, update: Update) -> Result<(), Box<dyn Error>> {
         // If any of these fail, the order book ends up in an invalid state.
-        self.snapshot.timestamp = update.timestamp;
-        self.snapshot.checksum = update.checksum;
-        update_orders(self.snapshot.asks.as_mut(), update.asks, true)?;
-        update_orders(self.snapshot.bids.as_mut(), update.bids, false)?;
-        truncate_price_level(self.snapshot.asks.as_mut(), self.max_depth);
-        truncate_price_level(self.snapshot.bids.as_mut(), self.max_depth);
+        self.order_book.asks.apply_events(update.asks)?;
+        self.order_book.asks.truncate_price_level(self.max_depth);
+        self.order_book.bids.apply_events(update.bids)?;
+        self.order_book.bids.truncate_price_level(self.max_depth);
 
-        let calculated = self.snapshot.calculate_checksum();
-        if calculated != self.snapshot.checksum {
+        let calculated = self.order_book.calculate_checksum();
+        if calculated != update.checksum {
             return Err(format!(
                 "Checksum mismatch after update. Calculated: {}. Update: {}",
-                calculated, self.snapshot.checksum
+                calculated, update.checksum
             )
             .into());
         }
         Ok(())
+    }
+
+    pub fn get_order_book(&self) -> &OrderBook {
+        &self.order_book
     }
 }
 
@@ -128,15 +318,12 @@ impl MirrorState {
     fn on_snapshot(
         &mut self,
         context: &MirrorContext,
-        snapshot: OrderBookSnapshot,
+        snapshot: Snapshot,
     ) -> Result<(), Box<dyn Error>> {
         match self {
             MirrorState::WaitingSnapshot => {
                 *self = MirrorState::WaitingUpdate {
-                    updater: OrderBookUpdater {
-                        max_depth: context.max_depth,
-                        snapshot,
-                    },
+                    updater: OrderBookUpdater::new(snapshot, context.max_depth),
                 };
                 Ok(())
             }
@@ -151,7 +338,7 @@ impl MirrorState {
     fn on_update(
         &mut self,
         _context: &MirrorContext,
-        update: OrderBookUpdate,
+        update: Update,
     ) -> Result<(), Box<dyn Error>> {
         match self {
             MirrorState::WaitingSnapshot => {
@@ -178,152 +365,35 @@ impl OrderBookMirror {
     }
 
     pub fn on_message(&mut self, msg: &str) -> Result<(), Box<dyn Error>> {
-        if let Ok(update_msg) = serde_json::from_str::<OrderBookUpdateMsg>(msg) {
+        if let Ok(update_msg) = serde_json::from_str::<UpdateMsg>(msg) {
             self.process_update(update_msg)
-        } else if let Ok(snapshot_msg) = serde_json::from_str::<OrderBookSnapshotMsg>(msg) {
+        } else if let Ok(snapshot_msg) = serde_json::from_str::<SnapshotMsg>(msg) {
             self.process_snapshot(snapshot_msg)
         } else {
             Err("Unexpected message".into())
         }
     }
 
-    pub fn get_order_book(&self) -> Option<&OrderBookSnapshot> {
+    pub fn get_order_book(&self) -> Option<&OrderBook> {
         match self.state {
-            MirrorState::WaitingUpdate { ref updater } => Some(&updater.snapshot),
+            MirrorState::WaitingUpdate { ref updater } => Some(updater.get_order_book()),
             _ => None,
         }
     }
 
     #[cold]
-    fn process_snapshot(
-        &mut self,
-        snapshot_msg: OrderBookSnapshotMsg,
-    ) -> Result<(), Box<dyn Error>> {
+    fn process_snapshot(&mut self, snapshot_msg: SnapshotMsg) -> Result<(), Box<dyn Error>> {
         snapshot_msg
             .data
             .into_iter()
             .try_for_each(|snapshot| self.state.on_snapshot(&self.context, snapshot))
     }
 
-    fn process_update(&mut self, update_msg: OrderBookUpdateMsg) -> Result<(), Box<dyn Error>> {
+    fn process_update(&mut self, update_msg: UpdateMsg) -> Result<(), Box<dyn Error>> {
         update_msg
             .data
             .into_iter()
             .try_for_each(|update| self.state.on_update(&self.context, update))
-    }
-}
-
-fn insert_order(orders: &mut Vec<Order>, event: OrderEvent, sort_asc: bool) {
-    let order = Order {
-        order_id: event.order_id,
-        limit_price: event.limit_price,
-        order_qty: event.order_qty,
-        timestamp: event.timestamp,
-    };
-
-    // Orders are sorted by limit_price (asc/desc) + timestamp(asc).
-    let idx = orders.partition_point(|o| match sort_asc {
-        true => {
-            o.limit_price < order.limit_price
-                || o.limit_price == order.limit_price && o.timestamp < order.timestamp
-        }
-        false => {
-            o.limit_price > order.limit_price
-                || o.limit_price == order.limit_price && o.timestamp < order.timestamp
-        }
-    });
-    orders.insert(idx, order);
-}
-
-fn find_order<'a>(
-    orders: &'a mut [Order],
-    event: &OrderEvent,
-    sort_asc: bool,
-) -> Option<(usize, &'a mut Order)> {
-    // Orders are sorted by limit_price (asc/desc) + timestamp(asc).
-    // First we locate the price level using a binary search first.
-    let idx = orders.partition_point(|o| match sort_asc {
-        true => o.limit_price < event.limit_price,
-        false => o.limit_price > event.limit_price,
-    });
-    // Then we do a linear search within the price level.
-    for (idx, order) in (idx..).zip(orders.iter_mut().skip(idx)) {
-        if order.order_id == event.order_id {
-            return Some((idx, order));
-        } else if order.limit_price != event.limit_price {
-            return None;
-        }
-    }
-    None
-}
-
-fn modify_order(orders: &mut Vec<Order>, event: OrderEvent, sort_asc: bool) -> bool {
-    if let Some((mut idx, order)) = find_order(orders, &event, sort_asc) {
-        if order.timestamp == event.timestamp {
-            // Update the qty in place.
-            order.order_qty = event.order_qty;
-        } else {
-            // Remove the order and continue doing a linear search for the insertion point within the price level, or
-            // at the end of it.
-            assert!(event.timestamp > order.timestamp);
-            orders.remove(idx);
-            for order in orders.iter().skip(idx) {
-                if event.timestamp < order.timestamp || order.limit_price != event.limit_price {
-                    break;
-                }
-                idx += 1;
-            }
-
-            let order = Order {
-                order_id: event.order_id,
-                limit_price: event.limit_price,
-                order_qty: event.order_qty,
-                timestamp: event.timestamp,
-            };
-            orders.insert(idx, order);
-        }
-        true
-    } else {
-        false
-    }
-}
-
-fn remove_order(orders: &mut Vec<Order>, event: &OrderEvent, sort_asc: bool) -> bool {
-    if let Some((idx, _)) = find_order(orders, event, sort_asc) {
-        orders.remove(idx);
-        true
-    } else {
-        false
-    }
-}
-
-fn find_price_level(orders: &[Order], level: usize) -> Option<usize> {
-    // Returns the position for the 1st order at the given price level.
-
-    if level >= orders.len() {
-        return None;
-    }
-
-    // Find the price leel.
-    let mut price_level: (Decimal, usize) = (orders[0].limit_price, 0);
-    for (index, order) in orders.iter().enumerate() {
-        if order.limit_price != price_level.0 {
-            // Update the price level.
-            price_level.0 = order.limit_price;
-            price_level.1 += 1;
-        }
-        // Stop once we reached the price level.
-        if price_level.1 == level {
-            return Some(index);
-        }
-    }
-    None
-}
-
-fn truncate_price_level(orders: &mut Vec<Order>, max_levels: usize) {
-    // Truncates orders leaving only the first max_levels.
-    if let Some(truncate_pos) = find_price_level(orders, max_levels) {
-        orders.drain(truncate_pos..);
     }
 }
 
@@ -336,40 +406,13 @@ fn serialize_decimal(value: &Decimal) -> String {
     value
 }
 
-fn update_orders(
-    orders: &mut Vec<Order>,
-    order_events: Vec<OrderEvent>,
-    sort_asc: bool,
-) -> Result<(), Box<dyn Error>> {
-    for order_event in order_events {
-        match order_event.event {
-            // A new order added to the book.
-            EventType::Add => {
-                insert_order(orders, order_event, sort_asc);
-            }
-            // The order has been removed from the book, i.e. full fill or cancel.
-            EventType::Delete => {
-                if !remove_order(orders, &order_event, sort_asc) {
-                    return Err(format!("Order not found {}", order_event.order_id).into());
-                }
-            }
-            // The order quantity has been modified, i.e. a fill.
-            EventType::Modify => {
-                if !modify_order(orders, order_event, sort_asc) {
-                    return Err("Order not found".into());
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs::File;
     use std::io::{BufRead, BufReader};
     use std::path::{Path, PathBuf};
+    use std::str::FromStr;
     use uuid::Uuid;
 
     fn test_file_path(fname: &str) -> PathBuf {
@@ -398,89 +441,145 @@ mod tests {
         }
     }
 
-    fn build_order_event(limit_price: Decimal) -> OrderEvent {
+    fn build_order_event(event: EventType, limit_price: Decimal) -> OrderEvent {
         OrderEvent {
             order_id: Uuid::new_v4().simple().to_string(),
             limit_price,
             order_qty: Decimal::from(1),
             timestamp: Utc::now(),
-            event: EventType::Add,
+            event,
         }
     }
 
-    #[test]
-    fn find_price_levels() {
-        // Load and check the snapshot.
-        let snapshot_msg: OrderBookSnapshotMsg =
-            serde_json::from_str(&read_test_file("level3_snapshot.json")).unwrap();
-        let snapshot = &snapshot_msg.data[0];
-
-        assert_eq!(find_price_level(&snapshot.bids, 0), Some(0));
-        assert_eq!(find_price_level(&snapshot.bids, 1), Some(4));
-        assert_eq!(find_price_level(&snapshot.bids, 9), Some(12));
-        assert_eq!(find_price_level(&snapshot.bids, 10), None);
-
-        let empty_vec: Vec<Order> = Vec::new();
-        assert_eq!(find_price_level(&empty_vec, 0), None);
-        assert_eq!(find_price_level(&empty_vec, 1), None);
+    fn build_orders(prices: &[Decimal], sort_asc: bool) -> Orders {
+        let mut orders = Orders {
+            orders: Vec::new(),
+            sort_asc,
+        };
+        for price in prices.iter() {
+            orders.insert_order(build_order(*price));
+        }
+        orders
     }
 
     #[test]
-    fn truncate_price_levels() {
+    fn orders_find_price_levels() {
+        let prices = [
+            "75650.0", "75650.0", "75650.0", "75650.0", "75647.4", "75646.9", "75644.8", "75644.7",
+            "75643.7", "75642.3", "75640.9", "75639.9", "75639.3",
+        ]
+        .map(|price| Decimal::from_str(price).expect("Invalid value"));
+        let bids = build_orders(&prices, false);
+
+        assert_eq!(bids.find_price_level(0), Some(0));
+        assert_eq!(bids.find_price_level(1), Some(4));
+        assert_eq!(bids.find_price_level(9), Some(12));
+        assert_eq!(bids.find_price_level(10), None);
+
+        let empty_bids = Orders {
+            orders: Vec::new(),
+            sort_asc: false,
+        };
+
+        assert_eq!(empty_bids.find_price_level(0), None);
+        assert_eq!(empty_bids.find_price_level(1), None);
+    }
+
+    #[test]
+    fn orders_truncate_price_levels() {
         let mid_price = Decimal::from(1000);
-        let mut bids: Vec<Order> = (0..10)
+        let prices: Vec<Decimal> = (0..10)
             .into_iter()
-            .map(|i| build_order(mid_price - Decimal::from(i)))
+            .map(|i| mid_price - Decimal::from(i))
             .collect();
+        let mut bids = build_orders(&prices, false);
 
         assert_eq!(bids.len(), 10);
         assert_eq!(bids[0].limit_price, Decimal::from(1000));
         assert_eq!(bids[9].limit_price, Decimal::from(991));
 
         // Nothing should change.
-        truncate_price_level(bids.as_mut(), 10);
+        bids.truncate_price_level(10);
 
         assert_eq!(bids.len(), 10);
         assert_eq!(bids[0].limit_price, Decimal::from(1000));
         assert_eq!(bids[9].limit_price, Decimal::from(991));
 
         // Just one level removed.
-        truncate_price_level(bids.as_mut(), 9);
+        bids.truncate_price_level(9);
 
         assert_eq!(bids.len(), 9);
         assert_eq!(bids[0].limit_price, Decimal::from(1000));
         assert_eq!(bids[8].limit_price, Decimal::from(992));
 
         // Leave only the first level.
-        truncate_price_level(bids.as_mut(), 1);
+        bids.truncate_price_level(1);
 
         assert_eq!(bids.len(), 1);
         assert_eq!(bids[0].limit_price, Decimal::from(1000));
 
         // No levels at all.
-        truncate_price_level(bids.as_mut(), 0);
+        bids.truncate_price_level(0);
 
         assert_eq!(bids.len(), 0);
     }
 
     #[test]
-    fn truncate_crowded_price_levels() {
+    fn orders_truncate_crowded_levels() {
         // Several orders share a price.
-        let mut crowded = Vec::new();
+        let mut crowded = Orders {
+            orders: Vec::new(),
+            sort_asc: false,
+        };
         for (price, count) in [(100, 2), (90, 1), (80, 2)] {
             for _ in 0..count {
-                crowded.push(build_order(Decimal::from(price)));
+                crowded.insert_order(build_order(Decimal::from(price)));
             }
         }
-        truncate_price_level(crowded.as_mut(), 2);
+        crowded.truncate_price_level(2);
 
         assert_eq!(crowded.len(), 3);
         assert_eq!(crowded[2].limit_price, Decimal::from(90));
 
-        truncate_price_level(crowded.as_mut(), 1);
+        crowded.truncate_price_level(1);
 
         assert_eq!(crowded.len(), 2);
         assert_eq!(crowded[1].limit_price, Decimal::from(100));
+    }
+
+    #[test]
+    fn orders_insert_and_delete() {
+        let prices: Vec<Decimal> = (0..3)
+            .into_iter()
+            .map(|i| Decimal::from(1) + Decimal::from(i))
+            .collect();
+        let mut orders = build_orders(&prices, true);
+
+        for value in ["0.5", "1.5", "3"] {
+            let event = build_order_event(EventType::Add, Decimal::from_str_exact(value).unwrap());
+            orders.insert_order(Order::from_event(event));
+        }
+
+        assert_eq!(
+            orders[0].limit_price,
+            Decimal::from_str_exact("0.5").unwrap()
+        );
+        assert_eq!(
+            orders[2].limit_price,
+            Decimal::from_str_exact("1.5").unwrap()
+        );
+        assert_eq!(orders[4].limit_price, Decimal::from_str_exact("3").unwrap());
+
+        // Remove the 2nd order.
+        let order_to_delete = &orders[2];
+        let event = OrderEvent {
+            order_id: order_to_delete.order_id.clone(),
+            limit_price: order_to_delete.limit_price.clone(),
+            order_qty: order_to_delete.order_qty.clone(),
+            timestamp: Utc::now(),
+            event: EventType::Delete,
+        };
+        assert!(orders.remove_order(&event.order_id, event.limit_price));
     }
 
     #[test]
@@ -495,7 +594,7 @@ mod tests {
             .into_iter()
             .map(|i| build_order(first_ask + Decimal::from(i)))
             .collect();
-        let snapshot = OrderBookSnapshot {
+        let snapshot = Snapshot {
             checksum: 1913449638,
             timestamp: Utc::now(),
             bids,
@@ -520,82 +619,79 @@ mod tests {
             snapshot.bids[9].limit_price,
             Decimal::from(first_bid) - Decimal::from(19)
         );
-        assert_eq!(snapshot.calculate_checksum(), 1913449638);
 
         // This update should end up being ignored since all levels should get inserted past the end.
         let bids: Vec<OrderEvent> = (20..25)
             .into_iter()
-            .map(|i| build_order_event(first_bid - Decimal::from(i)))
+            .map(|i| build_order_event(EventType::Add, first_bid - Decimal::from(i)))
             .collect();
         let asks: Vec<OrderEvent> = (20..25)
             .into_iter()
-            .map(|i| build_order_event(first_ask + Decimal::from(i)))
+            .map(|i| build_order_event(EventType::Add, first_ask + Decimal::from(i)))
             .collect();
-        let update = OrderBookUpdate {
+        let update = Update {
             checksum: 1913449638,
             timestamp: Utc::now(),
             bids,
             asks,
         };
-        let mut updater = OrderBookUpdater {
-            max_depth: 10,
-            snapshot,
-        };
-        updater.update(update).unwrap();
-        let snapshot = &updater.snapshot;
+        let mut updater = OrderBookUpdater::new(snapshot, 10);
 
-        assert_eq!(snapshot.asks.len(), 10);
-        assert_eq!(snapshot.bids.len(), 10);
+        updater.update(update).unwrap();
+        let obook = updater.get_order_book();
+
+        assert_eq!(obook.asks.len(), 10);
+        assert_eq!(obook.bids.len(), 10);
         assert_eq!(
-            snapshot.asks[9].limit_price,
+            obook.asks[9].limit_price,
             Decimal::from(first_ask) + Decimal::from(19)
         );
         assert_eq!(
-            snapshot.asks[0].limit_price,
+            obook.asks[0].limit_price,
             Decimal::from(first_ask) + Decimal::from(10)
         );
         assert_eq!(
-            snapshot.bids[0].limit_price,
+            obook.bids[0].limit_price,
             Decimal::from(first_bid) - Decimal::from(10)
         );
         assert_eq!(
-            snapshot.bids[9].limit_price,
+            obook.bids[9].limit_price,
             Decimal::from(first_bid) - Decimal::from(19)
         );
-        assert_eq!(snapshot.calculate_checksum(), 1913449638);
+        assert_eq!(obook.calculate_checksum(), 1913449638);
 
         // This update should get the snapshot truncated since 5 levels should have been inserted right at the
         // beginning.
         let bids: Vec<OrderEvent> = (0..5)
             .into_iter()
-            .map(|i| build_order_event(first_bid - Decimal::from(i)))
+            .map(|i| build_order_event(EventType::Add, first_bid - Decimal::from(i)))
             .collect();
         let asks: Vec<OrderEvent> = (0..5)
             .into_iter()
-            .map(|i| build_order_event(first_ask + Decimal::from(i)))
+            .map(|i| build_order_event(EventType::Add, first_ask + Decimal::from(i)))
             .collect();
-        let update = OrderBookUpdate {
+        let update = Update {
             checksum: 3473600046,
             timestamp: Utc::now(),
             bids,
             asks,
         };
         updater.update(update).unwrap();
-        let snapshot = &updater.snapshot;
+        let obook = updater.get_order_book();
 
-        assert_eq!(snapshot.asks.len(), 10);
-        assert_eq!(snapshot.bids.len(), 10);
+        assert_eq!(obook.asks.len(), 10);
+        assert_eq!(obook.bids.len(), 10);
         assert_eq!(
-            snapshot.asks[9].limit_price,
+            obook.asks[9].limit_price,
             Decimal::from(first_ask) + Decimal::from(14)
         );
-        assert_eq!(snapshot.asks[0].limit_price, Decimal::from(first_ask));
-        assert_eq!(snapshot.bids[0].limit_price, Decimal::from(first_bid));
+        assert_eq!(obook.asks[0].limit_price, Decimal::from(first_ask));
+        assert_eq!(obook.bids[0].limit_price, Decimal::from(first_bid));
         assert_eq!(
-            snapshot.bids[9].limit_price,
+            obook.bids[9].limit_price,
             Decimal::from(first_bid) - Decimal::from(14)
         );
-        assert_eq!(snapshot.calculate_checksum(), 3473600046);
+        assert_eq!(obook.calculate_checksum(), 3473600046);
     }
 
     #[test]
@@ -654,44 +750,7 @@ mod tests {
             line.clear();
         }
 
-        let snapshot = mirror.get_order_book().expect("No order book");
-        assert_eq!(snapshot.checksum, 1906173362);
-        assert_eq!(snapshot.calculate_checksum(), 1906173362);
-    }
-
-    #[test]
-    fn insert_and_delete_order() {
-        let mut orders: Vec<Order> = (0..3)
-            .into_iter()
-            .map(|i| build_order(Decimal::from(1) + Decimal::from(i)))
-            .collect();
-
-        for value in ["0.5", "1.5", "3"] {
-            let event = build_order_event(Decimal::from_str_exact(value).unwrap());
-            insert_order(&mut orders, event, true);
-        }
-        assert_eq!(
-            orders.get(0).unwrap().limit_price,
-            Decimal::from_str_exact("0.5").unwrap()
-        );
-        assert_eq!(
-            orders.get(2).unwrap().limit_price,
-            Decimal::from_str_exact("1.5").unwrap()
-        );
-        assert_eq!(
-            orders.get(4).unwrap().limit_price,
-            Decimal::from_str_exact("3").unwrap()
-        );
-
-        // Remove the 2nd order.
-        let order_to_delete = orders.get(2).unwrap();
-        let event = OrderEvent {
-            order_id: order_to_delete.order_id.clone(),
-            limit_price: order_to_delete.limit_price.clone(),
-            order_qty: order_to_delete.order_qty.clone(),
-            timestamp: Utc::now(),
-            event: EventType::Delete,
-        };
-        assert!(remove_order(&mut orders, &event, true));
+        let obook = mirror.get_order_book().expect("No order book");
+        assert_eq!(obook.calculate_checksum(), 1906173362);
     }
 }
