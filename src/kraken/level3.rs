@@ -306,6 +306,7 @@ impl OrderBookUpdater {
             )
             .into());
         }
+        self.order_book.timestamp = update.timestamp;
         Ok(())
     }
 
@@ -594,9 +595,18 @@ mod tests {
             .into_iter()
             .map(|i| build_order(first_ask + Decimal::from(i)))
             .collect();
+        let snapshot_ts = "2026-09-15T21:28:25.745828658Z"
+            .parse::<DateTime<Utc>>()
+            .unwrap();
+        let first_update_ts = "2026-09-15T21:28:25.964171032Z"
+            .parse::<DateTime<Utc>>()
+            .unwrap();
+        let second_update_ts = "2026-09-15T21:28:25.965086460Z"
+            .parse::<DateTime<Utc>>()
+            .unwrap();
         let snapshot = Snapshot {
             checksum: 1913449638,
-            timestamp: Utc::now(),
+            timestamp: snapshot_ts,
             bids,
             asks,
         };
@@ -631,7 +641,7 @@ mod tests {
             .collect();
         let update = Update {
             checksum: 1913449638,
-            timestamp: Utc::now(),
+            timestamp: first_update_ts,
             bids,
             asks,
         };
@@ -659,6 +669,7 @@ mod tests {
             Decimal::from(first_bid) - Decimal::from(19)
         );
         assert_eq!(obook.calculate_checksum(), 1913449638);
+        assert_eq!(obook.timestamp, first_update_ts);
 
         // This update should get the snapshot truncated since 5 levels should have been inserted right at the
         // beginning.
@@ -672,7 +683,7 @@ mod tests {
             .collect();
         let update = Update {
             checksum: 3473600046,
-            timestamp: Utc::now(),
+            timestamp: second_update_ts,
             bids,
             asks,
         };
@@ -692,6 +703,7 @@ mod tests {
             Decimal::from(first_bid) - Decimal::from(14)
         );
         assert_eq!(obook.calculate_checksum(), 3473600046);
+        assert_eq!(obook.timestamp, second_update_ts);
     }
 
     #[test]

@@ -1,13 +1,9 @@
-mod bench;
-mod kraken;
-mod mirror;
-
 use std::error::Error;
 
 pub fn main() -> Result<(), Box<dyn Error>> {
     if std::env::args().nth(1).as_deref() == Some("bench") {
-        bench::run()
+        rust_order_book_mirror::bench::run()
     } else {
-        mirror::run()
+        rust_order_book_mirror::mirror::run()
     }
 }

@@ -2,12 +2,14 @@
 
 Tokio binary that authenticates to Kraken, subscribes to the WebSocket v2 `level3` channel, and maintains a local order-by-order book. `mirror::obook_updater` prints one summary line per applied frame (best bid/ask, order-book imbalance, age). The book stays in memory for the process lifetime. The binary does not send orders.
 
-Single binary crate, edition 2024. Requires rustc 1.85+. Not a library and not a monorepo.
+One package, edition 2024. Requires rustc 1.85+. The binary is the product. A library target exists so the CodSpeed bench can call the replay. Not a monorepo.
 
 ## Layout
 
-- `src/main.rs` — declares `bench`, `kraken`, and `mirror`. A `bench` argument runs `bench::run()`. Otherwise `mirror::run()`.
-- `src/bench.rs` — offline replay of a captured `level3` log through `OrderBookMirror::on_message`. Default file `raw_messages.log`, default depth `100`. `get_message_type` only labels snapshot vs update timings. A debug build warns. The first apply error prints a partial report and exits 1.
+- `src/lib.rs` — declares `bench`, `kraken`, and `mirror`. `kraken` stays private to the crate.
+- `src/main.rs` — dispatch only. A `bench` argument runs `bench::run()`. Otherwise `mirror::run()`.
+- `benches/replay.rs` — CodSpeed/Divan harness. Loads `tmp/raw_messages.log` outside the timer and times `bench::replay` at depth 100. One sample.
+- `src/bench.rs` — offline replay of a captured `level3` log through `OrderBookMirror::on_message`. Default file `tmp/raw_messages.log`, default depth `100`. `get_message_type` only labels snapshot vs update timings. A debug build warns. The first apply error prints a partial report and exits 1.
 - `src/mirror.rs` — reads `KRAKEN_API_KEY` / `KRAKEN_API_SECRET`, spawns the reader and the updater on an unbounded `mpsc`
 - `src/kraken/mod.rs` — `pub(crate) mod json_utils; pub mod level3; mod utils; pub mod websockets;`
 - `src/kraken/websockets.rs` — REST token, connect, subscribe, forward `level3` text frames
@@ -17,7 +19,7 @@ Single binary crate, edition 2024. Requires rustc 1.85+. Not a library and not a
 - `tests/data/` — offline fixtures: `level3_snapshot.json`, `level3_update_1.json`, `level3_update_2.json`, `btc_usd_stream.log`
 - `Cargo.toml` / `Cargo.lock` — crate `rust-order-book-mirror`
 
-There is no `tests/*.rs` integration crate, no CI, and no `rustfmt.toml` / `clippy.toml` / `rust-toolchain.toml`. Unit tests live in `#[cfg(test)]` modules in `json_utils`, `utils`, `level3`, and `bench`. `README.md` only documents how to run the live client and the bench.
+There is no `tests/*.rs` integration crate and no `rustfmt.toml` / `clippy.toml` / `rust-toolchain.toml`. Unit tests live in `#[cfg(test)]` modules in `json_utils`, `utils`, `level3`, and `bench`. CI is `.github/workflows/codspeed.yml` only: CPU simulation of the replay, triggered on `workflow_dispatch`, push to `master`, and pull requests. It downloads the `raw_messages.log` asset from the `bench-fixture` GitHub Release into `tmp/`. `README.md` only documents how to run the live client, the local bench, and that CodSpeed workflow.
 
 `json_utils` and `utils` are declared only in `kraken/mod.rs`. `utils` is private. `json_utils` is `pub(crate)`. Modules inside `kraken` call `super::json_utils` and `super::utils`. `bench` calls `crate::kraken::json_utils`. A compiler hint to add either module in `main.rs` is wrong.
 
@@ -31,7 +33,7 @@ cargo build
 
 The binary does not load `.env`. Export the variables yourself, or `set -a; source .env; set +a` when a local `.env` exists.
 
-`.gitignore` lists `.DS_Store`, `.env`, `.vscode`, and `/target`. `raw_messages.log` (the bench's default capture) and `benchmark.md` are untracked. Never commit them, `.env`, or secrets.
+`.gitignore` lists `.DS_Store`, `.env`, `.vscode`, `/target`,  and `tmp/raw_messages.log`. `tmp/raw_messages.log` (the bench's default capture) and `benchmark.md` are untracked. Never commit them, `.env`, or secrets. The CodSpeed job downloads the `raw_messages.log` asset from the `bench-fixture` release into `tmp/`.
 
 ## Commands
 
@@ -43,7 +45,8 @@ The binary does not load `.env`. Export the variables yourself, or `set -a; sour
 | `cargo fmt` | rustfmt, default config |
 | `cargo clippy` | Lints, no project config |
 | `cargo run` | Long-running **live** client |
-| `cargo run --release -- bench` | Offline replay. Default file `raw_messages.log`, default depth `100` |
+| `cargo run --release -- bench` | Offline replay. Default file `tmp/raw_messages.log`, default depth `100` |
+| `cargo bench` | One release replay of `tmp/raw_messages.log` through the Divan harness |
 
 `cargo run` with no arguments calls Kraken REST and `wss://ws-l3.kraken.com/v2`. `cargo run -- bench` stays offline. Use `cargo check` and `cargo test` to verify a change. Run the live client only when the task needs a real session.
 
@@ -69,7 +72,7 @@ The binary does not load `.env`. Export the variables yourself, or `set -a; sour
 
    `OrderBookMirror::new` is called with the same depth (`100`). Those two depths must stay equal.
 5. `json_utils::is_channel_level3` scans the top-level JSON object for a plain `channel` string equal to `level3`. When that key is first, the scan returns without walking `data`. Heartbeat, status, and subscribe/unsubscribe acks are dropped. Acks nest `"channel":"level3"` under `result` or `params`, and a nested value does not match.
-6. The updater calls `OrderBookMirror::on_message` and `expect`s a book before it prints the summary with `println!`. Age is `Utc::now()` minus `OrderBook.timestamp` (the snapshot time). The first apply error returns from the updater task. A successful message that left no book panics on that `expect`. Close or a read error returns from the reader. No reconnect and no token refresh.
+6. The updater calls `OrderBookMirror::on_message` and `expect`s a book before it prints the summary with `println!`. Age is `Utc::now()` minus `OrderBook.timestamp` (the last accepted frame). The first apply error returns from the updater task. A successful message that left no book panics on that `expect`. Close or a read error returns from the reader. No reconnect and no token refresh.
 
 Kraken WebSocket tokens last about 15 minutes. `level3` requires a token and uses `wss://ws-l3.kraken.com/v2`. The public L2 `book` channel on `wss://ws.kraken.com/v2` is a different feed.
 
@@ -96,7 +99,7 @@ Side order, which the CRC queue depends on:
 
 After each side's events, truncate that side to `max_depth` distinct price levels (asks, then bids). Every order at the boundary price stays. Kraken omits `delete` for levels that fall out of the top N. Skipping the truncate duplicates `order_id`s when those levels return. Depth `0` drops every order.
 
-`OrderBook.timestamp` is copied from the snapshot and left unchanged, so the printed age stays anchored there. `update.timestamp` is unused after deserialize, including as a stale-update check.
+`OrderBook.timestamp` is copied from the snapshot, then replaced with `update.timestamp` after a checksum match. There is no stale-update check. A checksum or apply failure returns before that assignment.
 
 The checksum hashes every order on the top 10 price levels per side (asks, then bids), ignoring levels past the 10th price and ignoring the subscribed depth. Decimals are stringified with the point and leading zeros removed, then CRC32 (`crc32fast`). Subscribed depth must stay at least 10 so the local book can contain the levels Kraken hashes. Building the book copies asks, bids, and timestamp and drops `Payload.checksum`. Updates compare a fresh CRC against `update.checksum`. A checksum or apply failure sets `Invalid`.
 
@@ -130,6 +133,6 @@ The checksum hashes every order on the top 10 price levels per side (asks, then 
 
 **Never**
 
-- Commit secrets, `.env`, `raw_messages.log`, or `benchmark.md`.
+- Commit secrets, `.env`, `tmp/raw_messages.log`, or `benchmark.md`.
 - Put live Kraken calls in unit tests.
 - Run the live client as a substitute for compiling.

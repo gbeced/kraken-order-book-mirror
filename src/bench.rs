@@ -53,7 +53,7 @@ fn parse_bench_args(args: impl IntoIterator<Item = String>) -> Result<(PathBuf, 
         return Err("expected bench".to_string());
     }
 
-    let mut path = PathBuf::from("raw_messages.log");
+    let mut path = PathBuf::from("tmp/raw_messages.log");
     let mut depth = 100usize;
     let mut seen_file = false;
 
@@ -82,7 +82,7 @@ fn parse_depth(value: &str) -> Result<usize, String> {
     value.parse().map_err(|_| format!("invalid depth: {value}"))
 }
 
-fn load_messages(path: &Path) -> Result<Vec<String>, Box<dyn Error>> {
+pub fn load_messages(path: &Path) -> Result<Vec<String>, Box<dyn Error>> {
     let file =
         File::open(path).map_err(|err| format!("failed to open {}: {err}", path.display()))?;
     let reader = BufReader::with_capacity(1024 * 1024, file);
@@ -133,6 +133,17 @@ fn measure(messages: &[String], depth: usize) -> Result<Report, MeasureError> {
         update_nanos,
         book_present: black_box(mirror.get_order_book()).is_some(),
     })
+}
+
+// Sum every recorded sample so the apply loop stays live under Divan and CodSpeed.
+pub fn replay(messages: &[String], depth: usize) -> Result<u128, Box<dyn Error>> {
+    match measure(messages, depth) {
+        Ok(report) => {
+            let sum: u128 = report.update_nanos.iter().map(|nanos| *nanos as u128).sum();
+            Ok(sum + u128::from(report.book_present))
+        }
+        Err(err) => Err(format!("error at message {}: {}", err.index, err.message).into()),
+    }
 }
 
 // Nearest rank on a sorted slice: ceil(p/100 * n) - 1.
@@ -232,5 +243,10 @@ mod tests {
         assert_eq!(percentile(&samples, 99.0), 100);
         assert_eq!(percentile(&[42], 50.0), 42);
         assert_eq!(percentile(&[42], 99.0), 42);
+    }
+
+    #[test]
+    fn replay_empty_is_zero() {
+        assert_eq!(replay(&[], 100).unwrap(), 0);
     }
 }
