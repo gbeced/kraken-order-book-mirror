@@ -263,8 +263,8 @@ impl OrderBook {
             .take(ask_count)
             .chain(self.bids.iter().take(bid_count))
         {
-            buff.push_str(&serialize_decimal(&order.limit_price));
-            buff.push_str(&serialize_decimal(&order.order_qty));
+            append_checksum_decimal(&order.limit_price, &mut buff);
+            append_checksum_decimal(&order.order_qty, &mut buff);
         }
         crc32fast::hash(buff.as_bytes())
     }
@@ -398,13 +398,20 @@ impl OrderBookMirror {
     }
 }
 
-fn serialize_decimal(value: &Decimal) -> String {
-    let mut value = value.to_string().replace(".", "");
-    // Remove leading zeroes.
-    while value.starts_with('0') {
-        value.remove(0);
+fn append_checksum_decimal(value: &Decimal, out: &mut String) {
+    debug_assert!(!value.is_sign_negative());
+    let mut n = value.mantissa() as u64;
+    if n == 0 {
+        return;
     }
-    value
+    let mut buf = [0u8; 20];
+    let mut i = buf.len();
+    while n > 0 {
+        i -= 1;
+        buf[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+    }
+    out.push_str(std::str::from_utf8(&buf[i..]).unwrap());
 }
 
 #[cfg(test)]
@@ -461,6 +468,26 @@ mod tests {
             orders.insert_order(build_order(*price));
         }
         orders
+    }
+
+    #[test]
+    fn serialize_decimal_strips_point_and_leading_zeros() {
+        let cases = [
+            ("80796.1", "807961"),
+            ("80796.0", "807960"),
+            ("0.46450888", "46450888"),
+            ("0.00005000", "5000"),
+            ("10.00", "1000"),
+            ("0", ""),
+            ("0.00000000", ""),
+        ];
+        for (input, expected) in cases {
+            let value = Decimal::from_str(input).expect("Invalid value");
+            let mut serialized = String::new();
+            append_checksum_decimal(&value, &mut serialized);
+
+            assert_eq!(serialized, expected, "{input}");
+        }
     }
 
     #[test]
