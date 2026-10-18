@@ -21,4 +21,4 @@ cargo run --release -- bench [FILE] [--depth N]
 
 `FILE` defaults to `tmp/raw_messages.log`. `--depth` defaults to `100` and must match the depth that produced the file. The command times `OrderBookMirror::on_message` for each message and prints per-update latency at p50, p90, p95, p99, and p99.9. Use `--release` for comparable numbers.
 
-CodSpeed runs the same replay under CPU simulation and reports the total cost of applying the log, not the p99.9 line. In GitHub Actions, run the "CodSpeed Benchmarks" workflow. That job downloads the `raw_messages.log` asset from the `bench-fixture` release into `tmp/`. A push to `master` and a pull request run it as well.
+CodSpeed runs the same replay under CPU simulation and reports the total cost of applying the log, not the p99.9 line. In GitHub Actions, run the "CodSpeed Benchmarks" workflow. That job downloads the `tmp10k_messages.log` asset from the `bench-fixture` release into `tmp/`. A push to `master` and a pull request run it as well.

@@ -2,14 +2,13 @@ fn main() {
     divan::main();
 }
 
-// Depth matches the tmp/raw_messages.log capture. One sample: the replay is the whole log.
-#[divan::bench(sample_count = 1, sample_size = 1)]
+#[divan::bench]
 fn on_message_replay(bencher: divan::Bencher) {
     let messages =
-        rust_order_book_mirror::bench::load_messages(std::path::Path::new("tmp/raw_messages.log"))
-            .expect("failed to read tmp/raw_messages.log");
+        rust_order_book_mirror::bench::load_messages(std::path::Path::new("tmp/10k_messages.log"))
+            .expect("failed to read tmp/10k_messages.log");
     if messages.is_empty() {
-        panic!("no messages in tmp/raw_messages.log");
+        panic!("no messages in tmp/10k_messages.log");
     }
 
     bencher.bench_local(move || {
