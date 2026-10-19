@@ -241,34 +241,7 @@ impl Index<usize> for Orders {
     }
 }
 
-impl OrderBook {
-    fn calculate_checksum(&self) -> u32 {
-        // https://docs.kraken.com/exchange/guides/websockets/l3-checksum-v2
-        // Kraken hashes only the top 10 price levels for the checksum.
-        const CHECKSUM_PRICE_LEVELS: usize = 10;
-        let ask_count = self
-            .asks
-            .find_price_level(CHECKSUM_PRICE_LEVELS)
-            .unwrap_or(self.asks.len());
-        let bid_count = self
-            .bids
-            .find_price_level(CHECKSUM_PRICE_LEVELS)
-            .unwrap_or(self.bids.len());
-        // 10 bytes per value, 2 values (price and quantity).
-        let mut buff = String::with_capacity((ask_count + bid_count) * 10 * 2);
-
-        for order in self
-            .asks
-            .iter()
-            .take(ask_count)
-            .chain(self.bids.iter().take(bid_count))
-        {
-            append_checksum_decimal(&order.limit_price, &mut buff);
-            append_checksum_decimal(&order.order_qty, &mut buff);
-        }
-        crc32fast::hash(buff.as_bytes())
-    }
-}
+impl OrderBook {}
 
 impl OrderBookUpdater {
     fn new(snapshot: Snapshot, max_depth: usize) -> OrderBookUpdater {
@@ -298,7 +271,7 @@ impl OrderBookUpdater {
         self.order_book.bids.apply_events(update.bids)?;
         self.order_book.bids.truncate_price_level(self.max_depth);
 
-        let calculated = self.order_book.calculate_checksum();
+        let calculated = self.calculate_checksum();
         if calculated != update.checksum {
             return Err(format!(
                 "Checksum mismatch after update. Calculated: {}. Update: {}",
@@ -312,6 +285,35 @@ impl OrderBookUpdater {
 
     pub fn get_order_book(&self) -> &OrderBook {
         &self.order_book
+    }
+
+    fn calculate_checksum(&self) -> u32 {
+        let obook = self.get_order_book();
+
+        // https://docs.kraken.com/exchange/guides/websockets/l3-checksum-v2
+        // Kraken hashes only the top 10 price levels for the checksum.
+        const CHECKSUM_PRICE_LEVELS: usize = 10;
+        let ask_count = obook
+            .asks
+            .find_price_level(CHECKSUM_PRICE_LEVELS)
+            .unwrap_or(obook.asks.len());
+        let bid_count = obook
+            .bids
+            .find_price_level(CHECKSUM_PRICE_LEVELS)
+            .unwrap_or(obook.bids.len());
+        // 10 bytes per value, 2 values (price and quantity).
+        let mut buff = String::with_capacity((ask_count + bid_count) * 10 * 2);
+
+        for order in obook
+            .asks
+            .iter()
+            .take(ask_count)
+            .chain(obook.bids.iter().take(bid_count))
+        {
+            append_checksum_decimal(&order.limit_price, &mut buff);
+            append_checksum_decimal(&order.order_qty, &mut buff);
+        }
+        crc32fast::hash(buff.as_bytes())
     }
 }
 
@@ -695,8 +697,8 @@ mod tests {
             obook.bids[9].limit_price,
             Decimal::from(first_bid) - Decimal::from(19)
         );
-        assert_eq!(obook.calculate_checksum(), 1913449638);
         assert_eq!(obook.timestamp, first_update_ts);
+        assert_eq!(updater.calculate_checksum(), 1913449638);
 
         // This update should get the snapshot truncated since 5 levels should have been inserted right at the
         // beginning.
@@ -729,8 +731,8 @@ mod tests {
             obook.bids[9].limit_price,
             Decimal::from(first_bid) - Decimal::from(14)
         );
-        assert_eq!(obook.calculate_checksum(), 3473600046);
         assert_eq!(obook.timestamp, second_update_ts);
+        assert_eq!(updater.calculate_checksum(), 3473600046);
     }
 
     #[test]
@@ -789,7 +791,13 @@ mod tests {
             line.clear();
         }
 
-        let obook = mirror.get_order_book().expect("No order book");
-        assert_eq!(obook.calculate_checksum(), 1906173362);
+        match mirror.state {
+            MirrorState::WaitingUpdate { updater } => {
+                assert_eq!(updater.calculate_checksum(), 1906173362);
+            }
+            _ => {
+                assert!(false, "No order book");
+            }
+        }
     }
 }
