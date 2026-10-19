@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde::Deserialize;
+use std::cell::RefCell;
 use std::error::Error;
 use std::ops::Index;
 
@@ -69,6 +70,7 @@ pub struct OrderBook {
 struct OrderBookUpdater {
     order_book: OrderBook,
     max_depth: usize,
+    serializer_buff: RefCell<String>,
 }
 
 enum MirrorState {
@@ -261,6 +263,9 @@ impl OrderBookUpdater {
         OrderBookUpdater {
             order_book,
             max_depth,
+            serializer_buff: RefCell::new(
+                String::with_capacity(max_depth * 2 * 10)
+            )
         }
     }
 
@@ -301,9 +306,9 @@ impl OrderBookUpdater {
             .bids
             .find_price_level(CHECKSUM_PRICE_LEVELS)
             .unwrap_or(obook.bids.len());
-        // 10 bytes per value, 2 values (price and quantity).
-        let mut buff = String::with_capacity((ask_count + bid_count) * 10 * 2);
+        let mut buff = self.serializer_buff.borrow_mut();
 
+        buff.clear();
         for order in obook
             .asks
             .iter()
