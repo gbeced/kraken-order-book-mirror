@@ -1,7 +1,10 @@
 use chrono::{DateTime, Utc};
+use lru::LruCache;
 use rust_decimal::Decimal;
 use serde::Deserialize;
+use std::cell::RefCell;
 use std::error::Error;
+use std::num::NonZeroUsize;
 use std::ops::Index;
 
 // https://docs.kraken.com/exchange/api-reference/spot-websocket-v2/level3
@@ -69,6 +72,7 @@ pub struct OrderBook {
 struct OrderBookUpdater {
     order_book: OrderBook,
     max_depth: usize,
+    serializer_cache: RefCell<LruCache<Decimal, String>>,
 }
 
 enum MirrorState {
@@ -261,6 +265,9 @@ impl OrderBookUpdater {
         OrderBookUpdater {
             order_book,
             max_depth,
+            serializer_cache: RefCell::new(LruCache::new(
+                NonZeroUsize::new(max_depth * 2 * 100).unwrap(),
+            )),
         }
     }
 
@@ -301,8 +308,8 @@ impl OrderBookUpdater {
             .bids
             .find_price_level(CHECKSUM_PRICE_LEVELS)
             .unwrap_or(obook.bids.len());
-        // 10 bytes per value, 2 values (price and quantity).
-        let mut buff = String::with_capacity((ask_count + bid_count) * 10 * 2);
+        const SERIALIZED_DECIMAL_SIZE: usize = 10;
+        let mut buff = String::with_capacity((ask_count + bid_count) * SERIALIZED_DECIMAL_SIZE * 2);
 
         for order in obook
             .asks
@@ -310,8 +317,20 @@ impl OrderBookUpdater {
             .take(ask_count)
             .chain(obook.bids.iter().take(bid_count))
         {
-            append_checksum_decimal(&order.limit_price, &mut buff);
-            append_checksum_decimal(&order.order_qty, &mut buff);
+            for value in [&order.limit_price, &order.order_qty] {
+                let mut cache = self.serializer_cache.borrow_mut();
+                match cache.get(value) {
+                    Some(serialized) => {
+                        buff.push_str(serialized);
+                    }
+                    None => {
+                        let mut serialized = String::with_capacity(SERIALIZED_DECIMAL_SIZE);
+                        append_checksum_decimal(value, &mut serialized);
+                        buff.push_str(&serialized);
+                        cache.put(*value, serialized);
+                    }
+                }
+            }
         }
         crc32fast::hash(buff.as_bytes())
     }
