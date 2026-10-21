@@ -19,7 +19,7 @@ One package, edition 2024. Requires rustc 1.85+. The binary is the product. A li
 - `tests/data/` — offline fixtures: `level3_snapshot.json`, `level3_update_1.json`, `level3_update_2.json`, `btc_usd_stream.log`
 - `Cargo.toml` / `Cargo.lock` — crate `rust-order-book-mirror`
 
-There is no `tests/*.rs` integration crate and no `rustfmt.toml` / `clippy.toml` / `rust-toolchain.toml`. Unit tests live in `#[cfg(test)]` modules in `json_utils`, `utils`, `level3`, and `bench`. CI is `.github/workflows/codspeed.yml` only: CPU simulation of the replay, triggered on `workflow_dispatch`, push to `master`, and pull requests. It downloads the `10k_messages.log` asset from the `bench-fixture` GitHub Release into `tmp/`. `README.md` only documents how to run the live client, the local bench, and that CodSpeed workflow.
+There is no `tests/*.rs` integration crate and no `rustfmt.toml` / `clippy.toml` / `rust-toolchain.toml`. Unit tests live in `#[cfg(test)]` modules in `json_utils`, `utils`, `level3`, and `bench`. CI is `.github/workflows/codspeed.yml` only: CPU simulation of the replay, triggered on `workflow_dispatch`, push to `master`, and pull requests. It downloads the `10k_messages.log` asset from the `bench-fixture` GitHub Release into `tmp/`. `README.md` documents how to run the live client, the local bench, and that CodSpeed workflow. It also notes that the live client passes BTC/USD price scale 1 and quantity scale 8, and that the book stores counts of those increments.
 
 `json_utils` and `utils` are declared only in `kraken/mod.rs`. `utils` is private. `json_utils` is `pub(crate)`. Modules inside `kraken` call `super::json_utils` and `super::utils`. `bench` calls `crate::kraken::json_utils`. A compiler hint to add either module in `main.rs` is wrong.
 
@@ -70,7 +70,7 @@ Never commit `.env`, or secrets. The CodSpeed job downloads the `10k_messages.lo
    }
    ```
 
-   `OrderBookMirror::new` is called with the same depth (`100`). Those two depths must stay equal.
+   `OrderBookMirror::new` is called with that depth (`100`), price scale `1`, and quantity scale `8`. The subscribe depth and the `new` depth must stay equal. The live client passes those BTC/USD scales; do not hardcode them inside `level3`.
 5. `json_utils::is_channel_level3` scans the top-level JSON object for a plain `channel` string equal to `level3`. When that key is first, the scan returns without walking `data`. Heartbeat, status, and subscribe/unsubscribe acks are dropped. Acks nest `"channel":"level3"` under `result` or `params`, and a nested value does not match.
 6. The updater calls `OrderBookMirror::on_message` and `expect`s a book before it prints the summary with `println!`. Age is `Utc::now()` minus `OrderBook.timestamp` (the last accepted frame). The first apply error returns from the updater task. A successful message that left no book panics on that `expect`. Close or a read error returns from the reader. No reconnect and no token refresh.
 
@@ -84,11 +84,11 @@ References:
 
 ## Local book
 
-`OrderBookMirror` is `WaitingSnapshot`, then `WaitingUpdate`, or `Invalid`. A snapshot is required first. A second snapshot, an update before the snapshot, or any frame after `Invalid` is an error. `Invalid` is terminal: drop the book, and do not copy it to roll an update back. Resubscribe only when asked. `on_snapshot` / `on_update` take `&mut self` plus `&MirrorContext` (the depth sibling). Borrow `state` and `context` separately so a mutable borrow of `state` can sit next to a shared borrow of `context`. `OrderBookUpdater` copies `context.max_depth` when the snapshot is applied. `on_update` does not read `context`.
+`OrderBookMirror` is `WaitingSnapshot`, then `WaitingUpdate`, or `Invalid`. A snapshot is required first. A second snapshot, an update before the snapshot, or any frame after `Invalid` is an error. `Invalid` is terminal: drop the book, and do not copy it to roll an update back. Resubscribe only when asked. `on_snapshot` / `on_update` take `&mut self` plus `&MirrorContext`. Borrow `state` and `context` separately so a mutable borrow of `state` can sit next to a shared borrow of `context`. `MirrorContext` holds `max_depth`, `price_scale`, and `qty_scale`. `OrderBookUpdater::new` copies `max_depth` and passes both scales through to `OrderBook`. `on_update` does not read `context`.
 
 `on_message` deserializes the frame as `UpdateMsg` first, then as `SnapshotMsg`. `Order` has no `event` field, so an update payload also deserializes as a snapshot; the update attempt has to stay first. `channel` and `type` are not struct fields. A frame that matches neither returns `"Unexpected message"` and leaves the state unchanged. `data` is a `Vec` of one book per subscribed symbol. Fixtures are full frames (`channel` / `type` / `data`), including compact one-line frames in `btc_usd_stream.log`.
 
-Prices and quantities are `rust_decimal::Decimal` via `serde` arbitrary precision. Timestamps are `chrono::DateTime<Utc>`. Keep `limit_price` and `order_qty` at full decimal precision.
+`Order.limit_price` and `Order.order_qty` are public `u64` base-unit counts. `Order` does not convert to `Decimal`. `OrderBook::price_to_decimal` and `OrderBook::qty_to_decimal` do, using the `u8` scales stored on that book (`Decimal::from_i128_with_scale`). Wire JSON still parses with `rust_decimal` arbitrary precision into private `WireOrder` / `WireOrderEvent` values. `process_snapshot` and `process_update` convert those to units with `context.price_scale` and `context.qty_scale` before the state machine sees them. A negative value, a value that is not a multiple of the increment, or a count that does not fit in `u64` fails that conversion and leaves the state unchanged. Timestamps stay `chrono::DateTime<Utc>`. Comparisons, `partition_point`, and `find_price_level` use the `u64` fields. Do not put `Decimal` back on `Order`, and do not hardcode the scales in `level3`. The live client and the bench pass `1` and `8` because the feed is BTC/USD (tick `0.1`, step `1e-8`).
 
 Side order, which the CRC queue depends on:
 
@@ -101,9 +101,9 @@ After each side's events, truncate that side to `max_depth` distinct price level
 
 `OrderBook.timestamp` is copied from the snapshot, then replaced with `update.timestamp` after a checksum match. There is no stale-update check. A checksum or apply failure returns before that assignment.
 
-The checksum hashes every order on the top 10 price levels per side (asks, then bids), ignoring levels past the 10th price and ignoring the subscribed depth. Decimals are stringified with the point and leading zeros removed, then CRC32 (`crc32fast`). Subscribed depth must stay at least 10 so the local book can contain the levels Kraken hashes. Building the book copies asks, bids, and timestamp and drops `Payload.checksum`. Updates compare a fresh CRC against `update.checksum`. A checksum or apply failure sets `Invalid`.
+The checksum hashes every order on the top 10 price levels per side (asks, then bids), ignoring levels past the 10th price and ignoring the subscribed depth. Each stored count is written as its decimal digits, a zero count writes nothing, then CRC32 (`crc32fast`). On this feed the wire scale matches the tick and the step, so those digits are the Kraken checksum string (decimal point and leading zeros removed, trailing zeros kept). Subscribed depth must stay at least 10 so the local book can contain the levels Kraken hashes. Building the book copies asks, bids, and timestamp and drops `Payload.checksum`. Updates compare a fresh CRC against `update.checksum`. A checksum or apply failure sets `Invalid`.
 
-`Snapshot` is a type alias for `Payload<Order>`. An impl on that alias does not apply to `Payload<OrderEvent>` (`Update`). `Envelope<T>` is the `{ data: [...] }` frame. The maintained book is `OrderBook` (asks, bids, timestamp).
+`Snapshot` is a type alias for `Payload<Order>`. An impl on that alias does not apply to `Payload<OrderEvent>` (`Update`). JSON frames deserialize as `Envelope<Payload<WireOrder>>` and `Envelope<Payload<WireOrderEvent>>`, then convert into those unit payloads. `Envelope<T>` is the `{ data: [...] }` frame. The maintained book is `OrderBook` (asks, bids, timestamp, price scale, quantity scale).
 
 ## Conventions
 
@@ -127,7 +127,7 @@ The checksum hashes every order on the top 10 price levels per side (asks, then 
 
 **Ask first**
 
-- Changing the subscribed symbol, depth, or snapshot flag. The subscribe `depth` and `OrderBookMirror::new` argument must stay the same value.
+- Changing the subscribed symbol, depth, snapshot flag, or the BTC/USD price and quantity scales. The subscribe `depth` and the depth passed to `OrderBookMirror::new` must stay the same value.
 - Adding reconnect or token refresh.
 - Adding dependencies, CI, a README, or reformatting the whole crate.
 

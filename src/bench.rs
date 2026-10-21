@@ -98,7 +98,8 @@ pub fn load_messages(path: &Path) -> Result<Vec<String>, Box<dyn Error>> {
 }
 
 fn measure(messages: &[String], depth: usize) -> Result<Report, MeasureError> {
-    let mut mirror = level3::OrderBookMirror::new(depth);
+    // Captures are BTC/USD: price tick 0.1, quantity step 1e-8.
+    let mut mirror = level3::OrderBookMirror::new(depth, 1, 8);
     let mut snapshot_nanos = None;
     let mut update_nanos = Vec::with_capacity(messages.len());
 

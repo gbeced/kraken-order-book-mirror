@@ -12,7 +12,7 @@ struct Envelope<T> {
     data: Vec<T>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize)]
 struct Payload<T> {
     // symbol: String,
     checksum: u32,
@@ -21,14 +21,14 @@ struct Payload<T> {
     asks: Vec<T>,
 }
 
-#[derive(Deserialize, Debug)]
-pub struct Order {
-    pub order_id: String,
+#[derive(Deserialize)]
+struct WireOrder {
+    order_id: String,
     #[serde(with = "rust_decimal::serde::arbitrary_precision")]
-    pub limit_price: Decimal,
+    limit_price: Decimal,
     #[serde(with = "rust_decimal::serde::arbitrary_precision")]
-    pub order_qty: Decimal,
-    pub timestamp: DateTime<Utc>,
+    order_qty: Decimal,
+    timestamp: DateTime<Utc>,
 }
 
 #[derive(Deserialize)]
@@ -40,7 +40,7 @@ enum EventType {
 }
 
 #[derive(Deserialize)]
-struct OrderEvent {
+struct WireOrderEvent {
     order_id: String,
     #[serde(with = "rust_decimal::serde::arbitrary_precision")]
     limit_price: Decimal,
@@ -52,8 +52,23 @@ struct OrderEvent {
 
 type Snapshot = Payload<Order>;
 type Update = Payload<OrderEvent>;
-type SnapshotMsg = Envelope<Snapshot>;
-type UpdateMsg = Envelope<Update>;
+type SnapshotMsg = Envelope<Payload<WireOrder>>;
+type UpdateMsg = Envelope<Payload<WireOrderEvent>>;
+
+pub struct Order {
+    pub order_id: String,
+    pub limit_price: u64,
+    pub order_qty: u64,
+    pub timestamp: DateTime<Utc>,
+}
+
+struct OrderEvent {
+    order_id: String,
+    limit_price: u64,
+    order_qty: u64,
+    timestamp: DateTime<Utc>,
+    event: EventType,
+}
 
 // Orders are sorted by limit_price (asc/desc) + timestamp(asc).
 pub struct Orders {
@@ -65,6 +80,8 @@ pub struct OrderBook {
     pub asks: Orders,
     pub bids: Orders,
     pub timestamp: DateTime<Utc>,
+    price_scale: u8,
+    qty_scale: u8,
 }
 
 struct OrderBookUpdater {
@@ -81,6 +98,8 @@ enum MirrorState {
 
 struct MirrorContext {
     max_depth: usize,
+    price_scale: u8,
+    qty_scale: u8,
 }
 
 pub struct OrderBookMirror {
@@ -90,6 +109,7 @@ pub struct OrderBookMirror {
 
 impl Order {
     fn from_event(event: OrderEvent) -> Order {
+        // Not using From trait because the general expectation is that the conversion is lossless.
         Order {
             order_id: event.order_id,
             limit_price: event.limit_price,
@@ -122,7 +142,7 @@ impl Orders {
         self.orders.insert(idx, order);
     }
 
-    fn remove_order(&mut self, order_id: &str, limit_price: Decimal) -> bool {
+    fn remove_order(&mut self, order_id: &str, limit_price: u64) -> bool {
         if let Some((idx, _)) = self.find_order(order_id, limit_price) {
             self.orders.remove(idx);
             true
@@ -134,7 +154,7 @@ impl Orders {
     fn find_order<'a>(
         &'a mut self,
         order_id: &str,
-        limit_price: Decimal,
+        limit_price: u64,
     ) -> Option<(usize, &'a mut Order)> {
         // Orders are sorted by limit_price (asc/desc) + timestamp(asc).
         // First we locate the price level using a binary search first.
@@ -212,7 +232,7 @@ impl Orders {
         }
 
         // Find the price leel.
-        let mut price_level: (Decimal, usize) = (self.orders[0].limit_price, 0);
+        let mut price_level: (u64, usize) = (self.orders[0].limit_price, 0);
         for (index, order) in self.orders.iter().enumerate() {
             if order.limit_price != price_level.0 {
                 // Update the price level.
@@ -243,10 +263,23 @@ impl Index<usize> for Orders {
     }
 }
 
-impl OrderBook {}
+impl OrderBook {
+    pub fn price_to_decimal(&self, price: u64) -> Decimal {
+        Decimal::from_i128_with_scale(price as i128, u32::from(self.price_scale))
+    }
+
+    pub fn qty_to_decimal(&self, qty: u64) -> Decimal {
+        Decimal::from_i128_with_scale(qty as i128, u32::from(self.qty_scale))
+    }
+}
 
 impl OrderBookUpdater {
-    fn new(snapshot: Snapshot, max_depth: usize) -> OrderBookUpdater {
+    fn new(
+        snapshot: Snapshot,
+        max_depth: usize,
+        price_scale: u8,
+        qty_scale: u8,
+    ) -> OrderBookUpdater {
         let asks = Orders {
             orders: snapshot.asks,
             sort_asc: true,
@@ -259,13 +292,13 @@ impl OrderBookUpdater {
             asks,
             bids,
             timestamp: snapshot.timestamp,
+            price_scale,
+            qty_scale,
         };
         OrderBookUpdater {
             order_book,
             max_depth,
-            serializer_buff: RefCell::new(
-                String::with_capacity(max_depth * 2 * 10)
-            )
+            serializer_buff: RefCell::new(String::with_capacity(max_depth * 2 * 10)),
         }
     }
 
@@ -315,8 +348,8 @@ impl OrderBookUpdater {
             .take(ask_count)
             .chain(obook.bids.iter().take(bid_count))
         {
-            append_checksum_decimal(&order.limit_price, &mut buff);
-            append_checksum_decimal(&order.order_qty, &mut buff);
+            append_checksum_units(order.limit_price, &mut buff);
+            append_checksum_units(order.order_qty, &mut buff);
         }
         crc32fast::hash(buff.as_bytes())
     }
@@ -331,7 +364,12 @@ impl MirrorState {
         match self {
             MirrorState::WaitingSnapshot => {
                 *self = MirrorState::WaitingUpdate {
-                    updater: OrderBookUpdater::new(snapshot, context.max_depth),
+                    updater: OrderBookUpdater::new(
+                        snapshot,
+                        context.max_depth,
+                        context.price_scale,
+                        context.qty_scale,
+                    ),
                 };
                 Ok(())
             }
@@ -365,9 +403,13 @@ impl MirrorState {
 }
 
 impl OrderBookMirror {
-    pub fn new(max_depth: usize) -> OrderBookMirror {
+    pub fn new(max_depth: usize, price_scale: u8, qty_scale: u8) -> OrderBookMirror {
         OrderBookMirror {
-            context: MirrorContext { max_depth },
+            context: MirrorContext {
+                max_depth,
+                price_scale,
+                qty_scale,
+            },
             state: MirrorState::WaitingSnapshot,
         }
     }
@@ -391,23 +433,112 @@ impl OrderBookMirror {
 
     #[cold]
     fn process_snapshot(&mut self, snapshot_msg: SnapshotMsg) -> Result<(), Box<dyn Error>> {
-        snapshot_msg
-            .data
-            .into_iter()
-            .try_for_each(|snapshot| self.state.on_snapshot(&self.context, snapshot))
+        let price_scale = self.context.price_scale;
+        let qty_scale = self.context.qty_scale;
+        snapshot_msg.data.into_iter().try_for_each(|wire| {
+            let snapshot = wire.try_into_snapshot(price_scale, qty_scale)?;
+            self.state.on_snapshot(&self.context, snapshot)
+        })
     }
 
     fn process_update(&mut self, update_msg: UpdateMsg) -> Result<(), Box<dyn Error>> {
-        update_msg
-            .data
-            .into_iter()
-            .try_for_each(|update| self.state.on_update(&self.context, update))
+        let price_scale = self.context.price_scale;
+        let qty_scale = self.context.qty_scale;
+        update_msg.data.into_iter().try_for_each(|wire| {
+            let update = wire.try_into_update(price_scale, qty_scale)?;
+            self.state.on_update(&self.context, update)
+        })
     }
 }
 
-fn append_checksum_decimal(value: &Decimal, out: &mut String) {
-    debug_assert!(!value.is_sign_negative());
-    let mut n = value.mantissa() as u64;
+fn decimal_to_units(value: Decimal, scale: u8) -> Result<u64, Box<dyn Error>> {
+    if value.is_sign_negative() {
+        return Err("negative value".into());
+    }
+    let scale = u32::from(scale);
+    let mantissa = value.mantissa();
+    let value_scale = value.scale();
+    let units = if value_scale <= scale {
+        let factor = 10i128
+            .checked_pow(scale - value_scale)
+            .ok_or_else(|| -> Box<dyn Error> { "scale factor overflow".into() })?;
+        mantissa
+            .checked_mul(factor)
+            .ok_or_else(|| -> Box<dyn Error> { "unit count overflow".into() })?
+    } else {
+        let factor = 10i128
+            .checked_pow(value_scale - scale)
+            .ok_or_else(|| -> Box<dyn Error> { "scale factor overflow".into() })?;
+        if mantissa % factor != 0 {
+            return Err("value is not a multiple of the increment".into());
+        }
+        mantissa / factor
+    };
+    u64::try_from(units).map_err(|_| -> Box<dyn Error> { "unit count does not fit in u64".into() })
+}
+
+impl WireOrder {
+    fn try_into_order(self, price_scale: u8, qty_scale: u8) -> Result<Order, Box<dyn Error>> {
+        Ok(Order {
+            order_id: self.order_id,
+            limit_price: decimal_to_units(self.limit_price, price_scale)?,
+            order_qty: decimal_to_units(self.order_qty, qty_scale)?,
+            timestamp: self.timestamp,
+        })
+    }
+}
+
+impl WireOrderEvent {
+    fn try_into_event(self, price_scale: u8, qty_scale: u8) -> Result<OrderEvent, Box<dyn Error>> {
+        Ok(OrderEvent {
+            order_id: self.order_id,
+            limit_price: decimal_to_units(self.limit_price, price_scale)?,
+            order_qty: decimal_to_units(self.order_qty, qty_scale)?,
+            timestamp: self.timestamp,
+            event: self.event,
+        })
+    }
+}
+
+impl Payload<WireOrder> {
+    fn try_into_snapshot(self, price_scale: u8, qty_scale: u8) -> Result<Snapshot, Box<dyn Error>> {
+        Ok(Payload {
+            checksum: self.checksum,
+            timestamp: self.timestamp,
+            bids: self
+                .bids
+                .into_iter()
+                .map(|raw| raw.try_into_order(price_scale, qty_scale))
+                .collect::<Result<Vec<_>, _>>()?,
+            asks: self
+                .asks
+                .into_iter()
+                .map(|raw| raw.try_into_order(price_scale, qty_scale))
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
+}
+
+impl Payload<WireOrderEvent> {
+    fn try_into_update(self, price_scale: u8, qty_scale: u8) -> Result<Update, Box<dyn Error>> {
+        Ok(Payload {
+            checksum: self.checksum,
+            timestamp: self.timestamp,
+            bids: self
+                .bids
+                .into_iter()
+                .map(|raw| raw.try_into_event(price_scale, qty_scale))
+                .collect::<Result<Vec<_>, _>>()?,
+            asks: self
+                .asks
+                .into_iter()
+                .map(|raw| raw.try_into_event(price_scale, qty_scale))
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
+}
+
+fn append_checksum_units(mut n: u64, out: &mut String) {
     if n == 0 {
         return;
     }
@@ -430,6 +561,30 @@ mod tests {
     use std::str::FromStr;
     use uuid::Uuid;
 
+    // BTC/USD tick 0.1 and step 1e-8. The fixtures use these scales.
+    const PRICE_SCALE: u8 = 1;
+    const QTY_SCALE: u8 = 8;
+
+    fn scaled_book(price_scale: u8, qty_scale: u8) -> OrderBook {
+        OrderBook {
+            asks: Orders {
+                orders: Vec::new(),
+                sort_asc: true,
+            },
+            bids: Orders {
+                orders: Vec::new(),
+                sort_asc: false,
+            },
+            timestamp: Utc::now(),
+            price_scale: price_scale,
+            qty_scale: qty_scale,
+        }
+    }
+
+    fn units_to_decimal(units: u64, scale: u8) -> Decimal {
+        Decimal::from_i128_with_scale(units as i128, u32::from(scale))
+    }
+
     fn test_file_path(fname: &str) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/data")
@@ -447,20 +602,20 @@ mod tests {
         BufReader::new(file)
     }
 
-    fn build_order(limit_price: Decimal) -> Order {
+    fn build_order(limit_price: Decimal, price_scale: u8, qty_scale: u8) -> Order {
         Order {
             order_id: Uuid::new_v4().simple().to_string(),
-            limit_price,
-            order_qty: Decimal::from(1),
+            limit_price: decimal_to_units(limit_price, price_scale).expect("price units"),
+            order_qty: decimal_to_units(Decimal::from(1), qty_scale).expect("qty units"),
             timestamp: Utc::now(),
         }
     }
 
-    fn build_order_event(event: EventType, limit_price: Decimal) -> OrderEvent {
+    fn build_order_event(event: EventType, limit_price: Decimal, price_scale: u8, qty_scale: u8) -> OrderEvent {
         OrderEvent {
             order_id: Uuid::new_v4().simple().to_string(),
-            limit_price,
-            order_qty: Decimal::from(1),
+            limit_price: decimal_to_units(limit_price, price_scale).expect("price units"),
+            order_qty: decimal_to_units(Decimal::from(1), qty_scale).expect("qty units"),
             timestamp: Utc::now(),
             event,
         }
@@ -472,29 +627,25 @@ mod tests {
             sort_asc,
         };
         for price in prices.iter() {
-            orders.insert_order(build_order(*price));
+            orders.insert_order(build_order(*price, PRICE_SCALE, QTY_SCALE));
         }
         orders
     }
 
     #[test]
-    fn serialize_decimal_strips_point_and_leading_zeros() {
-        let cases = [
-            ("80796.1", "807961"),
-            ("80796.0", "807960"),
-            ("0.46450888", "46450888"),
-            ("0.00005000", "5000"),
-            ("10.00", "1000"),
-            ("0", ""),
-            ("0.00000000", ""),
-        ];
-        for (input, expected) in cases {
-            let value = Decimal::from_str(input).expect("Invalid value");
-            let mut serialized = String::new();
-            append_checksum_decimal(&value, &mut serialized);
+    fn order_price_and_qty_round_trip() {
+        let price = Decimal::from_str("80796.1").expect("Invalid value");
+        let qty = Decimal::from_str("0.00005000").expect("Invalid value");
+        let order = Order {
+            order_id: "id".to_string(),
+            limit_price: decimal_to_units(price, PRICE_SCALE).expect("price units"),
+            order_qty: decimal_to_units(qty, QTY_SCALE).expect("qty units"),
+            timestamp: Utc::now(),
+        };
 
-            assert_eq!(serialized, expected, "{input}");
-        }
+        let book = scaled_book(PRICE_SCALE, QTY_SCALE);
+        assert_eq!(book.price_to_decimal(order.limit_price), price);
+        assert_eq!(book.qty_to_decimal(order.order_qty), qty);
     }
 
     #[test]
@@ -530,28 +681,28 @@ mod tests {
         let mut bids = build_orders(&prices, false);
 
         assert_eq!(bids.len(), 10);
-        assert_eq!(bids[0].limit_price, Decimal::from(1000));
-        assert_eq!(bids[9].limit_price, Decimal::from(991));
+        assert_eq!(units_to_decimal(bids[0].limit_price, PRICE_SCALE), Decimal::from(1000));
+        assert_eq!(units_to_decimal(bids[9].limit_price, PRICE_SCALE), Decimal::from(991));
 
         // Nothing should change.
         bids.truncate_price_level(10);
 
         assert_eq!(bids.len(), 10);
-        assert_eq!(bids[0].limit_price, Decimal::from(1000));
-        assert_eq!(bids[9].limit_price, Decimal::from(991));
+        assert_eq!(units_to_decimal(bids[0].limit_price, PRICE_SCALE), Decimal::from(1000));
+        assert_eq!(units_to_decimal(bids[9].limit_price, PRICE_SCALE), Decimal::from(991));
 
         // Just one level removed.
         bids.truncate_price_level(9);
 
         assert_eq!(bids.len(), 9);
-        assert_eq!(bids[0].limit_price, Decimal::from(1000));
-        assert_eq!(bids[8].limit_price, Decimal::from(992));
+        assert_eq!(units_to_decimal(bids[0].limit_price, PRICE_SCALE), Decimal::from(1000));
+        assert_eq!(units_to_decimal(bids[8].limit_price, PRICE_SCALE), Decimal::from(992));
 
         // Leave only the first level.
         bids.truncate_price_level(1);
 
         assert_eq!(bids.len(), 1);
-        assert_eq!(bids[0].limit_price, Decimal::from(1000));
+        assert_eq!(units_to_decimal(bids[0].limit_price, PRICE_SCALE), Decimal::from(1000));
 
         // No levels at all.
         bids.truncate_price_level(0);
@@ -568,18 +719,18 @@ mod tests {
         };
         for (price, count) in [(100, 2), (90, 1), (80, 2)] {
             for _ in 0..count {
-                crowded.insert_order(build_order(Decimal::from(price)));
+                crowded.insert_order(build_order(Decimal::from(price), PRICE_SCALE, QTY_SCALE));
             }
         }
         crowded.truncate_price_level(2);
 
         assert_eq!(crowded.len(), 3);
-        assert_eq!(crowded[2].limit_price, Decimal::from(90));
+        assert_eq!(units_to_decimal(crowded[2].limit_price, PRICE_SCALE), Decimal::from(90));
 
         crowded.truncate_price_level(1);
 
         assert_eq!(crowded.len(), 2);
-        assert_eq!(crowded[1].limit_price, Decimal::from(100));
+        assert_eq!(units_to_decimal(crowded[1].limit_price, PRICE_SCALE), Decimal::from(100));
     }
 
     #[test]
@@ -591,26 +742,31 @@ mod tests {
         let mut orders = build_orders(&prices, true);
 
         for value in ["0.5", "1.5", "3"] {
-            let event = build_order_event(EventType::Add, Decimal::from_str_exact(value).unwrap());
+            let event = build_order_event(
+                EventType::Add, Decimal::from_str_exact(value).unwrap(), PRICE_SCALE, QTY_SCALE
+            );
             orders.insert_order(Order::from_event(event));
         }
 
         assert_eq!(
-            orders[0].limit_price,
+            units_to_decimal(orders[0].limit_price, PRICE_SCALE),
             Decimal::from_str_exact("0.5").unwrap()
         );
         assert_eq!(
-            orders[2].limit_price,
+            units_to_decimal(orders[2].limit_price, PRICE_SCALE),
             Decimal::from_str_exact("1.5").unwrap()
         );
-        assert_eq!(orders[4].limit_price, Decimal::from_str_exact("3").unwrap());
+        assert_eq!(
+            units_to_decimal(orders[4].limit_price, PRICE_SCALE),
+            Decimal::from_str_exact("3").unwrap()
+        );
 
         // Remove the 2nd order.
         let order_to_delete = &orders[2];
         let event = OrderEvent {
             order_id: order_to_delete.order_id.clone(),
-            limit_price: order_to_delete.limit_price.clone(),
-            order_qty: order_to_delete.order_qty.clone(),
+            limit_price: order_to_delete.limit_price,
+            order_qty: order_to_delete.order_qty,
             timestamp: Utc::now(),
             event: EventType::Delete,
         };
@@ -619,15 +775,17 @@ mod tests {
 
     #[test]
     fn order_book_updater_truncating_update() {
+        let price_scale: u8 = 0;
+        let qty_scale: u8 = 0;
         let first_ask = Decimal::from(1010);
         let first_bid = Decimal::from(1000);
         let bids: Vec<Order> = (10..20)
             .into_iter()
-            .map(|i| build_order(first_bid - Decimal::from(i)))
+            .map(|i| build_order(first_bid - Decimal::from(i), price_scale, qty_scale))
             .collect();
         let asks: Vec<Order> = (10..20)
             .into_iter()
-            .map(|i| build_order(first_ask + Decimal::from(i)))
+            .map(|i| build_order(first_ask + Decimal::from(i), price_scale, qty_scale))
             .collect();
         let snapshot_ts = "2026-09-15T21:28:25.745828658Z"
             .parse::<DateTime<Utc>>()
@@ -648,30 +806,30 @@ mod tests {
         assert_eq!(snapshot.asks.len(), 10);
         assert_eq!(snapshot.bids.len(), 10);
         assert_eq!(
-            snapshot.asks[9].limit_price,
+            units_to_decimal(snapshot.asks[9].limit_price, price_scale),
             Decimal::from(first_ask) + Decimal::from(19)
         );
         assert_eq!(
-            snapshot.asks[0].limit_price,
+            units_to_decimal(snapshot.asks[0].limit_price, price_scale),
             Decimal::from(first_ask) + Decimal::from(10)
         );
         assert_eq!(
-            snapshot.bids[0].limit_price,
+            units_to_decimal(snapshot.bids[0].limit_price, price_scale),
             Decimal::from(first_bid) - Decimal::from(10)
         );
         assert_eq!(
-            snapshot.bids[9].limit_price,
+            units_to_decimal(snapshot.bids[9].limit_price, price_scale),
             Decimal::from(first_bid) - Decimal::from(19)
         );
 
         // This update should end up being ignored since all levels should get inserted past the end.
         let bids: Vec<OrderEvent> = (20..25)
             .into_iter()
-            .map(|i| build_order_event(EventType::Add, first_bid - Decimal::from(i)))
+            .map(|i| build_order_event(EventType::Add, first_bid - Decimal::from(i), price_scale, qty_scale))
             .collect();
         let asks: Vec<OrderEvent> = (20..25)
             .into_iter()
-            .map(|i| build_order_event(EventType::Add, first_ask + Decimal::from(i)))
+            .map(|i| build_order_event(EventType::Add, first_ask + Decimal::from(i), price_scale, qty_scale))
             .collect();
         let update = Update {
             checksum: 1913449638,
@@ -679,7 +837,7 @@ mod tests {
             bids,
             asks,
         };
-        let mut updater = OrderBookUpdater::new(snapshot, 10);
+        let mut updater = OrderBookUpdater::new(snapshot, 10, 0, 0);
 
         updater.update(update).unwrap();
         let obook = updater.get_order_book();
@@ -687,19 +845,19 @@ mod tests {
         assert_eq!(obook.asks.len(), 10);
         assert_eq!(obook.bids.len(), 10);
         assert_eq!(
-            obook.asks[9].limit_price,
+            obook.price_to_decimal(obook.asks[9].limit_price),
             Decimal::from(first_ask) + Decimal::from(19)
         );
         assert_eq!(
-            obook.asks[0].limit_price,
+            obook.price_to_decimal(obook.asks[0].limit_price),
             Decimal::from(first_ask) + Decimal::from(10)
         );
         assert_eq!(
-            obook.bids[0].limit_price,
+            obook.price_to_decimal(obook.bids[0].limit_price),
             Decimal::from(first_bid) - Decimal::from(10)
         );
         assert_eq!(
-            obook.bids[9].limit_price,
+            obook.price_to_decimal(obook.bids[9].limit_price),
             Decimal::from(first_bid) - Decimal::from(19)
         );
         assert_eq!(obook.timestamp, first_update_ts);
@@ -709,11 +867,11 @@ mod tests {
         // beginning.
         let bids: Vec<OrderEvent> = (0..5)
             .into_iter()
-            .map(|i| build_order_event(EventType::Add, first_bid - Decimal::from(i)))
+            .map(|i| build_order_event(EventType::Add, first_bid - Decimal::from(i), price_scale, qty_scale))
             .collect();
         let asks: Vec<OrderEvent> = (0..5)
             .into_iter()
-            .map(|i| build_order_event(EventType::Add, first_ask + Decimal::from(i)))
+            .map(|i| build_order_event(EventType::Add, first_ask + Decimal::from(i), price_scale, qty_scale))
             .collect();
         let update = Update {
             checksum: 3473600046,
@@ -727,13 +885,19 @@ mod tests {
         assert_eq!(obook.asks.len(), 10);
         assert_eq!(obook.bids.len(), 10);
         assert_eq!(
-            obook.asks[9].limit_price,
+            obook.price_to_decimal(obook.asks[9].limit_price),
             Decimal::from(first_ask) + Decimal::from(14)
         );
-        assert_eq!(obook.asks[0].limit_price, Decimal::from(first_ask));
-        assert_eq!(obook.bids[0].limit_price, Decimal::from(first_bid));
         assert_eq!(
-            obook.bids[9].limit_price,
+            obook.price_to_decimal(obook.asks[0].limit_price),
+            Decimal::from(first_ask)
+        );
+        assert_eq!(
+            obook.price_to_decimal(obook.bids[0].limit_price),
+            Decimal::from(first_bid)
+        );
+        assert_eq!(
+            obook.price_to_decimal(obook.bids[9].limit_price),
             Decimal::from(first_bid) - Decimal::from(14)
         );
         assert_eq!(obook.timestamp, second_update_ts);
@@ -742,7 +906,7 @@ mod tests {
 
     #[test]
     fn mirror_processing_messages() {
-        let mut mirror = OrderBookMirror::new(10);
+        let mut mirror = OrderBookMirror::new(10, PRICE_SCALE, QTY_SCALE);
         let file_names = [
             "level3_snapshot.json",
             "level3_update_1.json",
@@ -756,7 +920,7 @@ mod tests {
 
     #[test]
     fn mirror_processing_fails_with_snapshot_expected() {
-        let mut mirror = OrderBookMirror::new(10);
+        let mut mirror = OrderBookMirror::new(10, PRICE_SCALE, QTY_SCALE);
 
         assert_eq!(
             mirror
@@ -769,7 +933,7 @@ mod tests {
 
     #[test]
     fn mirror_processing_fails_with_update_expected() {
-        let mut mirror = OrderBookMirror::new(10);
+        let mut mirror = OrderBookMirror::new(10, PRICE_SCALE, QTY_SCALE);
 
         mirror
             .on_message(&read_test_file("level3_snapshot.json"))
@@ -785,7 +949,7 @@ mod tests {
 
     #[test]
     fn mirror_checksum_mismatch_after_update() {
-        let mut mirror = OrderBookMirror::new(10);
+        let mut mirror = OrderBookMirror::new(10, PRICE_SCALE, QTY_SCALE);
         let mut reader = open_test_file("btc_usd_stream.log");
         let mut line = String::new();
 
