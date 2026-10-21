@@ -1,5 +1,4 @@
 use chrono::Utc;
-use rust_decimal::Decimal;
 use std::env;
 use std::error::Error;
 use tokio::sync::mpsc;
@@ -27,16 +26,18 @@ async fn obook_reader(
 async fn obook_updater(
     channel: &str,
     max_depth: usize,
+    price_scale: u8,
+    qty_scale: u8,
     mut receiver: mpsc::UnboundedReceiver<String>,
 ) -> Result<(), String> {
-    let mut mirror = kraken::level3::OrderBookMirror::new(max_depth);
+    let mut mirror = kraken::level3::OrderBookMirror::new(max_depth, price_scale, qty_scale);
 
     while let Some(msg) = receiver.recv().await {
         match mirror.on_message(&msg) {
             Ok(_) => {
                 let ob = mirror.get_order_book().expect("No order book");
-                let v_asks: Decimal = ob.asks.iter().map(|o| o.order_qty).sum();
-                let v_bids: Decimal = ob.bids.iter().map(|o| o.order_qty).sum();
+                let v_asks = ob.qty_to_decimal(ob.asks.iter().map(|order| order.order_qty).sum());
+                let v_bids = ob.qty_to_decimal(ob.bids.iter().map(|order| order.order_qty).sum());
                 let obi = (v_bids - v_asks) / (v_bids + v_asks);
                 let age = Utc::now() - ob.timestamp;
 
@@ -44,8 +45,8 @@ async fn obook_updater(
                     "{} {}: ask {} bid {} obi {} age {}",
                     ob.timestamp,
                     channel,
-                    ob.asks[0].limit_price,
-                    ob.bids[0].limit_price,
+                    ob.price_to_decimal(ob.asks[0].limit_price),
+                    ob.price_to_decimal(ob.bids[0].limit_price),
                     obi.round_dp(4),
                     age.as_seconds_f32()
                 );
@@ -66,13 +67,22 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
         env::var("KRAKEN_API_SECRET").map_err(|_| "KRAKEN_API_SECRET must be set".to_string())?;
     let channel = "BTC/USD";
     let max_depth = 100;
+    // BTC/USD tick is 0.1 and the quantity step is 1e-8.
+    let price_scale = 1;
+    let qty_scale = 8;
 
     let (sender, receiver) = mpsc::unbounded_channel::<String>();
     let (reader_res, updater_res) = tokio::join!(
         tokio::spawn(obook_reader(
             api_key, api_secret, channel, max_depth, sender
         )),
-        tokio::spawn(obook_updater(channel, max_depth, receiver)),
+        tokio::spawn(obook_updater(
+            channel,
+            max_depth,
+            price_scale,
+            qty_scale,
+            receiver
+        )),
     );
 
     if let Err(e) = reader_res? {
