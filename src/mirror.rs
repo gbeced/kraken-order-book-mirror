@@ -1,9 +1,8 @@
+use super::level3::{mirror, websockets};
 use chrono::Utc;
 use std::env;
 use std::error::Error;
 use tokio::sync::mpsc;
-
-use crate::kraken;
 
 async fn obook_reader(
     api_key: String,
@@ -12,15 +11,9 @@ async fn obook_reader(
     max_depth: usize,
     sender: mpsc::UnboundedSender<String>,
 ) -> Result<(), String> {
-    kraken::websockets::connect_and_dispatch_level3(
-        &api_key,
-        &api_secret,
-        channel,
-        max_depth,
-        sender,
-    )
-    .await
-    .map_err(|e| e.to_string())
+    websockets::connect_and_dispatch_level3(&api_key, &api_secret, channel, max_depth, sender)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 async fn obook_updater(
@@ -30,7 +23,7 @@ async fn obook_updater(
     qty_scale: u8,
     mut receiver: mpsc::UnboundedReceiver<String>,
 ) -> Result<(), String> {
-    let mut mirror = kraken::level3::OrderBookMirror::new(max_depth, price_scale, qty_scale);
+    let mut mirror = mirror::OrderBookMirror::new(max_depth, price_scale, qty_scale);
 
     while let Some(msg) = receiver.recv().await {
         match mirror.on_message(&msg) {

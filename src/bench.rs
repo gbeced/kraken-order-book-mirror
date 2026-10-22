@@ -5,7 +5,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::kraken::{json_utils, level3};
+use crate::level3::mirror;
 
 #[derive(Debug)]
 struct Report {
@@ -99,7 +99,7 @@ pub fn load_messages(path: &Path) -> Result<Vec<String>, Box<dyn Error>> {
 
 fn measure(messages: &[String], depth: usize) -> Result<Report, MeasureError> {
     // Captures are BTC/USD: price tick 0.1, quantity step 1e-8.
-    let mut mirror = level3::OrderBookMirror::new(depth, 1, 8);
+    let mut mirror = mirror::OrderBookMirror::new(depth, 1, 8);
     let mut snapshot_nanos = None;
     let mut update_nanos = Vec::with_capacity(messages.len());
 
@@ -110,10 +110,9 @@ fn measure(messages: &[String], depth: usize) -> Result<Report, MeasureError> {
         let result = black_box(result);
 
         match result {
-            Ok(()) => match json_utils::get_message_type(msg) {
-                "snapshot" => snapshot_nanos = Some(elapsed),
-                "update" => update_nanos.push(elapsed),
-                _ => {}
+            Ok(()) => match index {
+                0 => snapshot_nanos = Some(elapsed),
+                _ => update_nanos.push(elapsed),
             },
             Err(err) => {
                 return Err(MeasureError {
