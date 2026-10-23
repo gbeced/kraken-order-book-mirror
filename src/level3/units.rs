@@ -1,6 +1,6 @@
 use rust_decimal::Decimal;
 use std::error::Error;
-use std::fmt::Write;
+use std::fmt::NumBuffer;
 
 pub fn to_units(value: Decimal, scale: u8) -> Result<u64, Box<dyn Error>> {
     if value.is_sign_negative() {
@@ -33,9 +33,11 @@ pub fn to_decimal(units: u64, scale: u8) -> Decimal {
 }
 
 pub fn serialize_units(units: u64, out: &mut String) {
-    if units != 0 {
-        write!(out, "{units}").unwrap();
+    if units == 0 {
+        return;
     }
+    let mut buf = NumBuffer::new();
+    out.push_str(units.format_into(&mut buf));
 }
 
 #[cfg(test)]
