@@ -8,7 +8,7 @@ One package, edition 2024. Requires rustc 1.85+. The binary is the product. A li
 
 - `src/lib.rs` — declares `bench`, `kraken`, and `mirror`. `kraken` stays private to the crate.
 - `src/main.rs` — dispatch only. A `bench` argument runs `bench::run()`. Otherwise `mirror::run()`.
-- `benches/replay.rs` — CodSpeed/Divan harness. Loads `tmp/10k_messages.log` outside the timer and times `bench::replay` at depth 100. One sample.
+- `benches/replay.rs` — CodSpeed/Divan harness. Loads `tmp/1k_messages.log` outside the timer and times `bench::replay` at depth 100. One sample.
 - `src/bench.rs` — offline replay of a captured `level3` log through `OrderBookMirror::on_message`. Default file `tmp/raw_messages.log`, default depth `100`. `get_message_type` only labels snapshot vs update timings. A debug build warns. The first apply error prints a partial report and exits 1.
 - `src/mirror.rs` — reads `KRAKEN_API_KEY` / `KRAKEN_API_SECRET`, spawns the reader and the updater on an unbounded `mpsc`
 - `src/kraken/mod.rs` — `pub(crate) mod json_utils; pub mod level3; mod utils; pub mod websockets;`
@@ -19,7 +19,7 @@ One package, edition 2024. Requires rustc 1.85+. The binary is the product. A li
 - `tests/data/` — offline fixtures: `level3_snapshot.json`, `level3_update_1.json`, `level3_update_2.json`, `btc_usd_stream.log`
 - `Cargo.toml` / `Cargo.lock` — crate `rust-order-book-mirror`
 
-There is no `tests/*.rs` integration crate and no `rustfmt.toml` / `clippy.toml` / `rust-toolchain.toml`. Unit tests live in `#[cfg(test)]` modules in `json_utils`, `utils`, `level3`, and `bench`. CI is `.github/workflows/codspeed.yml` only: CPU simulation of the replay, triggered on `workflow_dispatch`, push to `master`, and pull requests. It downloads the `10k_messages.log` asset from the `bench-fixture` GitHub Release into `tmp/`. `README.md` documents how to run the live client, the local bench, and that CodSpeed workflow. It also notes that the live client passes BTC/USD price scale 1 and quantity scale 8, and that the book stores counts of those increments.
+There is no `tests/*.rs` integration crate and no `rustfmt.toml` / `clippy.toml` / `rust-toolchain.toml`. Unit tests live in `#[cfg(test)]` modules in `json_utils`, `utils`, `level3`, and `bench`. CI is `.github/workflows/codspeed.yml` only: CPU simulation of the replay, triggered on `workflow_dispatch`, push to `master`, and pull requests. It downloads the `1k_messages.log` asset from the `bench-fixture` GitHub Release into `tmp/`. `README.md` documents how to run the live client, the local bench, and that CodSpeed workflow. It also notes that the live client passes BTC/USD price scale 1 and quantity scale 8, and that the book stores counts of those increments.
 
 `json_utils` and `utils` are declared only in `kraken/mod.rs`. `utils` is private. `json_utils` is `pub(crate)`. Modules inside `kraken` call `super::json_utils` and `super::utils`. `bench` calls `crate::kraken::json_utils`. A compiler hint to add either module in `main.rs` is wrong.
 
@@ -33,7 +33,7 @@ cargo build
 
 The binary does not load `.env`. Export the variables yourself, or `set -a; source .env; set +a` when a local `.env` exists.
 
-Never commit `.env`, or secrets. The CodSpeed job downloads the `10k_messages.log` asset from the `bench-fixture` release into `tmp/`.
+Never commit `.env`, or secrets. The CodSpeed job downloads the `1k_messages.log` asset from the `bench-fixture` release into `tmp/`.
 
 ## Commands
 
@@ -46,7 +46,7 @@ Never commit `.env`, or secrets. The CodSpeed job downloads the `10k_messages.lo
 | `cargo clippy` | Lints, no project config |
 | `cargo run` | Long-running **live** client |
 | `cargo run --release -- bench` | Offline replay. Default file `tmp/raw_messages.log`, default depth `100` |
-| `cargo bench` | One release replay of `tmp/10k_messages.log` through the Divan harness |
+| `cargo bench` | One release replay of `tmp/1k_messages.log` through the Divan harness |
 
 `cargo run` with no arguments calls Kraken REST and `wss://ws-l3.kraken.com/v2`. `cargo run -- bench` stays offline. Use `cargo check` and `cargo test` to verify a change. Run the live client only when the task needs a real session.
 

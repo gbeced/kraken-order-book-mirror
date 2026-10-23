@@ -30,7 +30,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p tmp
-          gh release download bench-fixture --pattern 10k_messages.log --dir tmp
+          gh release download bench-fixture --pattern 1k_messages.log --dir tmp
 
       - name: Build the benchmark target(s)
         run: cargo codspeed build
