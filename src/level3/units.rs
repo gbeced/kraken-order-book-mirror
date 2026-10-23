@@ -25,6 +25,7 @@ pub fn to_units(value: Decimal, scale: u8) -> Result<u64, Box<dyn Error>> {
         }
         mantissa / factor
     };
+
     u64::try_from(units).map_err(|_| -> Box<dyn Error> { "unit count does not fit in u64".into() })
 }
 
@@ -47,18 +48,37 @@ mod tests {
     use std::str::FromStr;
 
     #[test]
-    fn order_price_and_qty_round_trip() {
+    fn units_conversion_round_trip() {
         let cases = [
-            ("1", 0 as u8, 1 as u64),
+            ("0", 0 as u8, 0 as u64),
+            ("0", 8, 0),
+            ("0.00000000", 8, 0),
+            ("1", 0, 1),
             ("1", 8, 100000000),
+            ("1.5", 8, 150000000),
+            ("1.50", 1, 15),
+            ("10.00", 1, 100),
+            ("80796.0", 1, 807960),
             ("80796.1", 1, 807961),
             ("80796.1", 2, 8079610),
+            ("75644.7", 1, 756447),
+            ("75644.70", 1, 756447),
+            ("0.00005100", 8, 5100),
+            ("0.46450888", 8, 46450888),
+            ("1.32196829", 8, 132196829),
+            ("1.320", 2, 132),
         ];
 
         for (str_value, scale, units) in cases {
+            // From decimal to units.
             assert_eq!(
                 to_units(Decimal::from_str(str_value).unwrap(), scale).unwrap(),
                 units
+            );
+            // From units to decimal.
+            assert_eq!(
+                to_decimal(units, scale),
+                Decimal::from_str(str_value).unwrap()
             );
         }
     }
