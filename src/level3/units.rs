@@ -67,4 +67,31 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn serialize_units_writes_digits() {
+        let cases = [
+            (0_u64, ""),
+            (1, "1"),
+            (807_961, "807961"),
+            (807_960, "807960"),
+            (46_450_888, "46450888"),
+            (5_000, "5000"),
+            (1_000, "1000"),
+            (100_000_000, "100000000"),
+            (u64::MAX, "18446744073709551615"),
+        ];
+
+        for (units, digits) in cases {
+            let mut out = String::new();
+            serialize_units(units, &mut out);
+            assert_eq!(out, digits, "{units}");
+        }
+
+        let mut out = String::new();
+        serialize_units(807_961, &mut out);
+        serialize_units(5_000, &mut out);
+        serialize_units(0, &mut out);
+        assert_eq!(out, "8079615000");
+    }
 }
