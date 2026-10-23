@@ -11,14 +11,6 @@ pub fn is_channel_level3(msg: &str) -> bool {
     JsonScanner::new(msg.as_bytes()).top_level_plain_string(b"channel") == Some("level3")
 }
 
-// Top-level "type" as a plain string borrowed from `msg`.
-// Missing, nested, or escaped values are "". The scan stops at that key.
-pub fn get_message_type(msg: &str) -> &str {
-    JsonScanner::new(msg.as_bytes())
-        .top_level_plain_string(b"type")
-        .unwrap_or("")
-}
-
 struct JsonScanner<'a> {
     bytes: &'a [u8],
     i: usize,
@@ -271,47 +263,6 @@ mod tests {
         ];
         for sample in samples {
             assert!(!is_channel_level3(sample), "{sample}");
-        }
-    }
-
-    #[test]
-    fn reads_message_type() {
-        let samples = [
-            (
-                r#"{"channel":"level3","type":"snapshot","data":[]}"#,
-                "snapshot",
-            ),
-            (
-                r#"{"channel":"level3","type":"update","data":[]}"#,
-                "update",
-            ),
-            (
-                r#"{"type":"update","channel":"level3","data":[]}"#,
-                "update",
-            ),
-            ("{\n  \"type\" : \"snapshot\"\n}", "snapshot"),
-            (r#"{"type":"snapshot","data":[}"#, "snapshot"),
-        ];
-        for (sample, expected) in samples {
-            assert_eq!(get_message_type(sample), expected, "{sample}");
-        }
-        assert_eq!(
-            get_message_type(&fixture("level3_snapshot.json")),
-            "snapshot"
-        );
-        assert_eq!(get_message_type(&fixture("level3_update_1.json")), "update");
-        assert_eq!(get_message_type(&fixture("level3_update_2.json")), "update");
-
-        let missing = [
-            "",
-            "{}",
-            r#"{"channel":"level3"}"#,
-            r#"{"data":{"type":"snapshot"}}"#,
-            r#"{"type":"\u0073napshot"}"#,
-            r#"{"type":""}"#,
-        ];
-        for sample in missing {
-            assert_eq!(get_message_type(sample), "", "{sample}");
         }
     }
 }

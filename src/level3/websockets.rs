@@ -8,7 +8,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tungstenite::client::IntoClientRequest;
 
 use super::json_utils;
-use super::utils;
+use super::sign;
 
 #[derive(Debug, Deserialize)]
 struct ApiResponse<T> {
@@ -30,7 +30,7 @@ async fn get_websocket_auth_token(
     let path = "/0/private/GetWebSocketsToken";
     let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
     let body = format!("nonce={nonce}");
-    let signature = utils::get_signature(path, nonce, &body, api_secret)?;
+    let signature = sign::get_signature(path, nonce, &body, api_secret)?;
 
     let url = format!("https://api.kraken.com{path}");
     let client = reqwest::Client::new();
