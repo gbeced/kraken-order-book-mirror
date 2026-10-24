@@ -98,7 +98,8 @@ impl std::fmt::Debug for Case {
 }
 
 // One update on a book that already holds the snapshot. `with_inputs` rebuilds
-// that book, so the timed call is only `on_message` of the update.
+// that book outside the timer. `bench_local_refs` keeps the mirror and drops it
+// after the timed call, so the sample is `on_message` and not book teardown.
 #[divan::bench(args = CASES)]
 fn on_update(bencher: divan::Bencher, case: Case) {
     let prepared = prepare(case);
@@ -110,7 +111,7 @@ fn on_update(bencher: divan::Bencher, case: Case) {
                 .unwrap_or_else(|err| panic!("{case} snapshot: {err}"));
             mirror
         })
-        .bench_local_values(|mut mirror| {
+        .bench_local_refs(|mirror| {
             mirror
                 .on_message(divan::black_box(&prepared.update))
                 .unwrap_or_else(|err| panic!("{case} update: {err}"));
