@@ -25,13 +25,6 @@ jobs:
           cache-target: release
           bins: cargo-codspeed
 
-      - name: Fetch the replay log
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p tmp
-          gh release download bench-fixture --pattern 1k_messages.log --dir tmp
-
       - name: Build the benchmark target(s)
         run: cargo codspeed build
 
