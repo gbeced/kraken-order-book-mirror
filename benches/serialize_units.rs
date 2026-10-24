@@ -28,9 +28,3 @@ fn small_qty(bencher: divan::Bencher) {
     // 0.00005100 at the step: four digits.
     bench_serialize(bencher, 5_100);
 }
-
-#[divan::bench]
-fn zero(bencher: divan::Bencher) {
-    // A zero count writes nothing.
-    bench_serialize(bencher, 0);
-}

@@ -135,7 +135,7 @@ fn measure(messages: &[String], depth: usize) -> Result<Report, MeasureError> {
     })
 }
 
-// Sum every recorded sample so the apply loop stays live under Divan and CodSpeed.
+// Sum of per-update nanos, plus one when the book is still present.
 pub fn replay(messages: &[String], depth: usize) -> Result<u128, Box<dyn Error>> {
     match measure(messages, depth) {
         Ok(report) => {

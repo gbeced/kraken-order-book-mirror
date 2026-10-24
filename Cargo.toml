@@ -23,13 +23,13 @@ uuid = { version = "1.27.0", features = ["v4"] }
 divan = { package = "codspeed-divan-compat", version = "5.0.3" }
 
 [[bench]]
-name = "replay"
-harness = false
-
-[[bench]]
 name = "to_units"
 harness = false
 
 [[bench]]
 name = "serialize_units"
+harness = false
+
+[[bench]]
+name = "mirror"
 harness = false
