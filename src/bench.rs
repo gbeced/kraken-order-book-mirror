@@ -9,7 +9,6 @@ use crate::level3::mirror;
 
 #[derive(Debug)]
 struct Report {
-    snapshot_nanos: Option<u64>,
     update_nanos: Vec<u64>,
     book_present: bool,
 }
@@ -99,7 +98,6 @@ pub fn load_messages(path: &Path) -> Result<Vec<String>, Box<dyn Error>> {
 fn measure(messages: &[String], depth: usize) -> Result<Report, MeasureError> {
     // Captures are BTC/USD: price tick 0.1, quantity step 1e-8.
     let mut mirror = mirror::OrderBookMirror::new(depth, 1, 8);
-    let mut snapshot_nanos = None;
     let mut update_nanos = Vec::with_capacity(messages.len());
 
     for (index, msg) in messages.iter().enumerate() {
@@ -109,16 +107,17 @@ fn measure(messages: &[String], depth: usize) -> Result<Report, MeasureError> {
         let result = black_box(result);
 
         match result {
-            Ok(()) => match index {
-                0 => snapshot_nanos = Some(elapsed),
-                _ => update_nanos.push(elapsed),
+            // Message 0 is the snapshot. Later frames are updates.
+            Ok(()) => {
+                if index != 0 {
+                    update_nanos.push(elapsed);
+                }
             },
             Err(err) => {
                 return Err(MeasureError {
                     index,
                     message: err.to_string(),
                     partial: Report {
-                        snapshot_nanos,
                         update_nanos,
                         book_present: mirror.get_order_book().is_some(),
                     },
@@ -128,7 +127,6 @@ fn measure(messages: &[String], depth: usize) -> Result<Report, MeasureError> {
     }
 
     Ok(Report {
-        snapshot_nanos,
         update_nanos,
         book_present: black_box(mirror.get_order_book()).is_some(),
     })
@@ -162,11 +160,8 @@ fn print_report(path: &Path, depth: usize, report: &Report) {
     let mut updates = report.update_nanos.clone();
     updates.sort_unstable();
 
-    let applied = report.snapshot_nanos.is_some() as usize + updates.len();
     row("file", &path.display().to_string());
     row("depth", &depth.to_string());
-    row("messages", &applied.to_string());
-    row("snapshot", &format_sample(report.snapshot_nanos));
     row("updates", &updates.len().to_string());
 
     if updates.is_empty() {
@@ -210,13 +205,6 @@ fn print_report(path: &Path, depth: usize, report: &Report) {
 
 fn row(label: &str, value: &str) {
     println!("{label:<12}{value}");
-}
-
-fn format_sample(nanos: Option<u64>) -> String {
-    match nanos {
-        Some(nanos) => format_us(nanos),
-        None => "n/a".to_string(),
-    }
 }
 
 fn format_us(nanos: impl Into<u128>) -> String {
