@@ -24,7 +24,7 @@ struct MeasureError {
 pub fn run() -> Result<(), Box<dyn Error>> {
     if cfg!(debug_assertions) {
         eprintln!(
-            "warning: debug build timings are not comparable; use cargo run --release -- bench"
+            "warning: debug build timings are not comparable; use cargo run --release -- bench <file>"
         );
     }
 
@@ -53,9 +53,8 @@ fn parse_bench_args(args: impl IntoIterator<Item = String>) -> Result<(PathBuf, 
         return Err("expected bench".to_string());
     }
 
-    let mut path = PathBuf::from("tmp/raw_messages.log");
+    let mut path = None;
     let mut depth = 100usize;
-    let mut seen_file = false;
 
     while let Some(arg) = args.next() {
         if arg == "--depth" {
@@ -67,14 +66,14 @@ fn parse_bench_args(args: impl IntoIterator<Item = String>) -> Result<(PathBuf, 
             depth = parse_depth(value)?;
         } else if arg.starts_with('-') {
             return Err(format!("unknown argument: {arg}"));
-        } else if !seen_file {
-            path = PathBuf::from(arg);
-            seen_file = true;
+        } else if path.is_none() {
+            path = Some(PathBuf::from(arg));
         } else {
             return Err(format!("unexpected argument: {arg}"));
         }
     }
 
+    let path = path.ok_or_else(|| "messages file is required".to_string())?;
     Ok((path, depth))
 }
 

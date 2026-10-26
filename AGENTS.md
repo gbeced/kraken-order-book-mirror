@@ -9,7 +9,7 @@ One package, edition 2024. Requires rustc 1.85+. The binary is the product. A li
 - `src/lib.rs` — declares `bench`, `kraken`, and `mirror`. `kraken` stays private to the crate.
 - `src/main.rs` — dispatch only. A `bench` argument runs `bench::run()`. Otherwise `mirror::run()`.
 - `benches/mirror.rs` — CodSpeed/Divan harness. Eighteen `on_update` cases. Each applies one ask event to a book built from a 100-level snapshot. The snapshot apply is outside the timer. Cases cross `add` / `modify` / `delete`, ask level 0 / 50 / 99, and 1 or 4 orders per level.
-- `src/bench.rs` — offline replay of a captured `level3` log through `OrderBookMirror::on_message`. Default file `tmp/raw_messages.log`, default depth `100`. `get_message_type` only labels snapshot vs update timings. A debug build warns. The first apply error prints a partial report and exits 1.
+- `src/bench.rs` — offline replay of a captured `level3` log through `OrderBookMirror::on_message`. The messages file is required. Default depth `100`. `get_message_type` only labels snapshot vs update timings. A debug build warns. The first apply error prints a partial report and exits 1.
 - `src/mirror.rs` — reads `KRAKEN_API_KEY` / `KRAKEN_API_SECRET`, spawns the reader and the updater on an unbounded `mpsc`
 - `src/kraken/mod.rs` — `pub(crate) mod json_utils; pub mod level3; mod utils; pub mod websockets;`
 - `src/kraken/websockets.rs` — REST token, connect, subscribe, forward `level3` text frames
@@ -45,7 +45,7 @@ Never commit `.env`, or secrets.
 | `cargo fmt` | rustfmt, default config |
 | `cargo clippy` | Lints, no project config |
 | `cargo run` | Long-running **live** client |
-| `cargo run --release -- bench` | Offline replay. Default file `tmp/raw_messages.log`, default depth `100` |
+| `cargo run --release -- bench FILE` | Offline replay of `FILE`. Default depth `100` |
 | `cargo bench` | Release Divan benches: one-update mirror cases, and the unit benches |
 
 `cargo run` with no arguments calls Kraken REST and `wss://ws-l3.kraken.com/v2`. `cargo run -- bench` stays offline. Use `cargo check` and `cargo test` to verify a change. Run the live client only when the task needs a real session.

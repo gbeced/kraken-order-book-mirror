@@ -16,9 +16,9 @@ cargo run
 ## Benchmark
 
 ```bash
-cargo run --release -- bench [FILE] [--depth N]
+cargo run --release -- bench FILE [--depth N]
 ```
 
-`FILE` defaults to `tmp/raw_messages.log`. `--depth` defaults to `100` and must match the depth that produced the file. The command times `OrderBookMirror::on_message` for each message and prints per-update latency at p50, p90, p95, p99, and p99.9. Use `--release` for comparable numbers.
+`FILE` is the captured level3 log. `--depth` defaults to `100` and must match the depth that produced the file. The command times `OrderBookMirror::on_message` for each message and prints per-update latency at p50, p90, p95, p99, and p99.9. Use `--release` for comparable numbers.
 
 CodSpeed runs the Divan benches under CPU simulation. In GitHub Actions, run the "CodSpeed Benchmarks" workflow. A push to `master` and a pull request run it as well.
