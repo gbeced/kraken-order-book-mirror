@@ -1,5 +1,5 @@
 use super::level3::{mirror, websockets};
-use chrono::Utc;
+use super::tui;
 use std::env;
 use std::error::Error;
 use tokio::sync::mpsc;
@@ -24,25 +24,33 @@ async fn obook_updater(
     mut receiver: mpsc::UnboundedReceiver<String>,
 ) -> Result<(), String> {
     let mut mirror = mirror::OrderBookMirror::new(max_depth, price_scale, qty_scale);
+    let mut screen = tui::Screen::new();
 
     while let Some(msg) = receiver.recv().await {
         match mirror.on_message(&msg) {
             Ok(_) => {
                 let ob = mirror.get_order_book().expect("No order book");
-                let v_asks = ob.qty_to_decimal(ob.asks.iter().map(|order| order.order_qty).sum());
-                let v_bids = ob.qty_to_decimal(ob.bids.iter().map(|order| order.order_qty).sum());
-                let obi = (v_bids - v_asks) / (v_bids + v_asks);
-                let age = Utc::now() - ob.timestamp;
-
-                println!(
-                    "{} {}: ask {} bid {} obi {} age {}",
-                    ob.timestamp,
-                    channel,
-                    ob.price_to_decimal(ob.asks[0].limit_price),
-                    ob.price_to_decimal(ob.bids[0].limit_price),
-                    obi.round_dp(4),
-                    age.as_seconds_f32()
-                );
+                let asks: Vec<_> = ob
+                    .asks
+                    .iter()
+                    .map(|order| {
+                        (
+                            ob.price_to_decimal(order.limit_price),
+                            ob.qty_to_decimal(order.order_qty),
+                        )
+                    })
+                    .collect();
+                let bids: Vec<_> = ob
+                    .bids
+                    .iter()
+                    .map(|order| {
+                        (
+                            ob.price_to_decimal(order.limit_price),
+                            ob.qty_to_decimal(order.order_qty),
+                        )
+                    })
+                    .collect();
+                screen.draw(channel, &asks, &bids, ob.timestamp)?;
             }
             Err(e) => {
                 return Err(e.to_string());
@@ -59,7 +67,7 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
     let api_secret =
         env::var("KRAKEN_API_SECRET").map_err(|_| "KRAKEN_API_SECRET must be set".to_string())?;
     let channel = "BTC/USD";
-    let max_depth = 100;
+    let max_depth = 1000;
     // BTC/USD tick is 0.1 and the quantity step is 1e-8.
     let price_scale = 1;
     let qty_scale = 8;

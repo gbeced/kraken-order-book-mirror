@@ -112,7 +112,7 @@ fn measure(messages: &[String], depth: usize) -> Result<Report, MeasureError> {
                 if index != 0 {
                     update_nanos.push(elapsed);
                 }
-            },
+            }
             Err(err) => {
                 return Err(MeasureError {
                     index,
