@@ -11,7 +11,7 @@ set +a
 cargo run
 ```
 
-`cargo run` connects to Kraken and prints one summary line per applied level3 frame. It does not send orders. For BTC/USD it passes a price scale of 1 (tick `0.1`) and a quantity scale of 8 (step `1e-8`). The book stores each price and quantity as a count of that increment.
+`cargo run` connects to Kraken and fills the terminal with ratatui order-book cards. It does not send orders. For BTC/USD it subscribes at depth `1000`, and passes a price scale of 1 (tick `0.1`) and a quantity scale of 8 (step `1e-8`). The book stores each price and quantity as a count of that increment.
 
 ## Benchmark
 

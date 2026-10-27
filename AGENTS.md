@@ -1,16 +1,17 @@
 # rust-order-book-mirror
 
-Tokio binary that authenticates to Kraken, subscribes to the WebSocket v2 `level3` channel, and maintains a local order-by-order book. `mirror::obook_updater` prints one summary line per applied frame (best bid/ask, order-book imbalance, age). The book stays in memory for the process lifetime. The binary does not send orders.
+Tokio binary that authenticates to Kraken, subscribes to the WebSocket v2 `level3` channel, and maintains a local order-by-order book. `mirror::obook_updater` applies each frame. `tui::Screen` paints order-book cards (mid, spread, microprice, imbalance, 0.5% and 1% depth, updates per second, and age). The book stays in memory for the process lifetime. The binary does not send orders.
 
 One package, edition 2024. Requires rustc 1.85+. The binary is the product. A library target exists so the CodSpeed benches can call the crate. Not a monorepo.
 
 ## Layout
 
-- `src/lib.rs` — declares `bench`, `kraken`, and `mirror`. `kraken` stays private to the crate.
+- `src/lib.rs` — declares `bench`, `kraken`, `mirror`, and crate-private `tui`. `kraken` stays private to the crate.
 - `src/main.rs` — dispatch only. A `bench` argument runs `bench::run()`. Otherwise `mirror::run()`.
 - `benches/mirror.rs` — CodSpeed/Divan harness. Eighteen `on_update` cases. Each applies one ask event to a book built from a 100-level snapshot. The snapshot apply is outside the timer. Cases cross `add` / `modify` / `delete`, ask level 0 / 50 / 99, and 1 or 4 orders per level.
 - `src/bench.rs` — offline replay of a captured `level3` log through `OrderBookMirror::on_message`. The messages file is required. Default depth `100`. `get_message_type` only labels snapshot vs update timings. A debug build warns. The first apply error prints a partial report and exits 1.
-- `src/mirror.rs` — reads `KRAKEN_API_KEY` / `KRAKEN_API_SECRET`, spawns the reader and the updater on an unbounded `mpsc`
+- `src/mirror.rs` — reads `KRAKEN_API_KEY` / `KRAKEN_API_SECRET`, spawns the reader and the updater on an unbounded `mpsc`. The updater calls `tui::Screen`.
+- `src/tui.rs` — panel metrics, formatting, and ratatui redraw. `Screen` is the only public item. It receives decimal price and quantity pairs and does not import `level3`. Cards are a vertical stack of bordered blocks. The live client draws one card and always takes the terminal.
 - `src/kraken/mod.rs` — `pub(crate) mod json_utils; pub mod level3; mod utils; pub mod websockets;`
 - `src/kraken/websockets.rs` — REST token, connect, subscribe, forward `level3` text frames
 - `src/kraken/json_utils.rs` — byte scans: `is_channel_level3` and `get_message_type`. `pub(crate)` so `bench` can call the type scan. The read loop uses the channel scan.
@@ -19,7 +20,7 @@ One package, edition 2024. Requires rustc 1.85+. The binary is the product. A li
 - `tests/data/` — offline fixtures: `level3_snapshot.json`, `level3_update_1.json`, `level3_update_2.json`, `btc_usd_stream.log`
 - `Cargo.toml` / `Cargo.lock` — crate `rust-order-book-mirror`
 
-There is no `tests/*.rs` integration crate and no `rustfmt.toml` / `clippy.toml` / `rust-toolchain.toml`. Unit tests live in `#[cfg(test)]` modules in `json_utils`, `utils`, `level3`, and `bench`. CI is `.github/workflows/codspeed.yml` only: CPU simulation of the Divan benches, triggered on `workflow_dispatch`, push to `master`, and pull requests. `README.md` documents how to run the live client, the local bench, and that CodSpeed workflow. It also notes that the live client passes BTC/USD price scale 1 and quantity scale 8, and that the book stores counts of those increments.
+There is no `tests/*.rs` integration crate and no `rustfmt.toml` / `clippy.toml` / `rust-toolchain.toml`. Unit tests live in `#[cfg(test)]` modules in `json_utils`, `utils`, `level3`, `tui`, and `bench`. CI is `.github/workflows/codspeed.yml` only: CPU simulation of the Divan benches, triggered on `workflow_dispatch`, push to `master`, and pull requests. `README.md` documents how to run the live client, the local bench, and that CodSpeed workflow. It also notes that the live client passes BTC/USD price scale 1 and quantity scale 8, and that the book stores counts of those increments.
 
 `json_utils` and `utils` are declared only in `kraken/mod.rs`. `utils` is private. `json_utils` is `pub(crate)`. Modules inside `kraken` call `super::json_utils` and `super::utils`. `bench` calls `crate::kraken::json_utils`. A compiler hint to add either module in `main.rs` is wrong.
 
@@ -41,7 +42,7 @@ Never commit `.env`, or secrets.
 | --- | --- |
 | `cargo check` | Typecheck |
 | `cargo build` | Debug build |
-| `cargo test` | Unit tests in `json_utils`, `utils`, `level3`, and `bench`. No network |
+| `cargo test` | Unit tests in `json_utils`, `utils`, `level3`, `tui`, and `bench`. No network |
 | `cargo fmt` | rustfmt, default config |
 | `cargo clippy` | Lints, no project config |
 | `cargo run` | Long-running **live** client |
@@ -52,17 +53,17 @@ Never commit `.env`, or secrets.
 
 ## Runtime
 
-1. `mirror::run` reads the two env vars and joins two tasks. The reader sends raw `level3` text frames. The updater owns `OrderBookMirror`.
+1. `mirror::run` reads the two env vars and runs two tasks. The reader sends raw `level3` text frames. The updater owns `OrderBookMirror`. When the updater returns, `run` aborts the reader.
 2. Token: POST `https://api.kraken.com/0/private/GetWebSocketsToken`. Body is the hand-built form `nonce={nonce}`. `utils::get_signature` is SHA256 of `nonce` concatenated with that body, then HMAC-SHA512 of `url_path || sha256` using the base64-decoded API secret. Headers are `API-Key` and `API-Sign` (base64 HMAC). `TokenResult` stores `token`. The `expires` field is commented out and is not deserialized.
 3. Connect to `wss://ws-l3.kraken.com/v2` (native-tls via tokio-tungstenite). Tungstenite answers WebSocket ping itself. The read loop ignores non-text messages.
-4. Subscribe. Symbol `BTC/USD` and depth `100` are hardcoded in `mirror.rs`. The reader and the updater both receive that depth. `snapshot: true` is hardcoded in `src/kraken/websockets.rs`:
+4. Subscribe. Symbol `BTC/USD` and depth `1000` are hardcoded in `mirror.rs`. The reader and the updater both receive that depth. `snapshot: true` is hardcoded in `src/kraken/websockets.rs`:
 
    ```json
    {
      "method": "subscribe",
      "params": {
        "channel": "level3",
-       "depth": 100,
+       "depth": 1000,
        "symbol": ["BTC/USD"],
        "snapshot": true,
        "token": "<token>"
@@ -70,9 +71,9 @@ Never commit `.env`, or secrets.
    }
    ```
 
-   `OrderBookMirror::new` is called with that depth (`100`), price scale `1`, and quantity scale `8`. The subscribe depth and the `new` depth must stay equal. The live client passes those BTC/USD scales; do not hardcode them inside `level3`.
+   `OrderBookMirror::new` is called with that depth (`1000`), price scale `1`, and quantity scale `8`. The subscribe depth and the `new` depth must stay equal. The live client passes those BTC/USD scales; do not hardcode them inside `level3`.
 5. `json_utils::is_channel_level3` scans the top-level JSON object for a plain `channel` string equal to `level3`. When that key is first, the scan returns without walking `data`. Heartbeat, status, and subscribe/unsubscribe acks are dropped. Acks nest `"channel":"level3"` under `result` or `params`, and a nested value does not match.
-6. The updater calls `OrderBookMirror::on_message` and `expect`s a book before it prints the summary with `println!`. Age is `Utc::now()` minus `OrderBook.timestamp` (the last accepted frame). The first apply error returns from the updater task. A successful message that left no book panics on that `expect`. Close or a read error returns from the reader. No reconnect and no token refresh.
+6. The updater calls `OrderBookMirror::on_message`. On success it calls `Screen::note_update` with the symbol, which records that book's one-second update rate and reports whether a paint is due (immediately on the first attempt, then at most every 100ms). When a paint is not due, the updater skips decimal conversion and `draw`. When it is due, the updater `expect`s the book, converts each order with `OrderBook::price_to_decimal` and `OrderBook::qty_to_decimal`, and passes those pairs to `Screen::draw`. `draw` paints a ratatui fullscreen alternate screen: bordered cards stacked from the top, one per symbol. Each card shows mid, spread, microprice, imbalance, 0.5% and 1% depth, that book's updates per second, and age. Age is `Utc::now()` minus the frame timestamp, computed in `tui` at paint time. A book with no best price, a zero mid, a zero touch, or zero totals skips the paint and does not move the throttle stamp. That frame still counts in the rate window. `q` or Ctrl-C restores the terminal and aborts the reader. The first apply error returns from the updater task, which also aborts the reader. A successful message that left no book panics on that `expect`. Close or a read error returns from the reader. No reconnect and no token refresh.
 
 Kraken WebSocket tokens last about 15 minutes. `level3` requires a token and uses `wss://ws-l3.kraken.com/v2`. The public L2 `book` channel on `wss://ws.kraken.com/v2` is a different feed.
 
@@ -107,8 +108,8 @@ The checksum hashes every order on the top 10 price levels per side (asks, then 
 
 ## Conventions
 
-- Match surrounding style (4-space indent). `eprintln!` for errors, `println!` for the summary line.
-- Keep `main.rs` as the dispatch entry. The live session stays in `mirror.rs`. Kraken protocol code stays under `src/kraken/`.
+- Match surrounding style (4-space indent). `eprintln!` for reader and updater errors. The panel goes to stdout from `tui`.
+- Keep `main.rs` as the dispatch entry. The live session stays in `mirror.rs`. Panel rendering, formatting, and redraw stay in `src/tui.rs`. Kraken protocol code stays under `src/kraken/`.
 - New tests: `#[cfg(test)]` next to the code. Fixtures go in `tests/data/` and are read via `CARGO_MANIFEST_DIR`. No live network. No real API keys in fixtures.
 - `get_websocket_auth_token` builds the form body by hand. Leave that as it is unless the task is the auth request.
 
