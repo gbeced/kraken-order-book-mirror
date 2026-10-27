@@ -1,8 +1,10 @@
-use super::level3::{mirror, websockets};
-use super::tui;
+use super::level3::{mirror, order_book, websockets};
+use super::tui::{self, UiEvent};
 use std::env;
 use std::error::Error;
+use std::future::pending;
 use tokio::sync::mpsc;
+use tokio::task::JoinError;
 
 async fn obook_reader(
     api_key: String,
@@ -24,40 +26,62 @@ async fn obook_updater(
     mut receiver: mpsc::UnboundedReceiver<String>,
 ) -> Result<(), String> {
     let mut mirror = mirror::OrderBookMirror::new(max_depth, price_scale, qty_scale);
-    let mut screen = tui::Screen::new();
+    let mut screen = tui::Screen::new()?;
+    let mut ui_events = screen.take_events();
 
-    while let Some(msg) = receiver.recv().await {
-        match mirror.on_message(&msg) {
-            Ok(_) => {
-                let ob = mirror.get_order_book().expect("No order book");
-                let asks: Vec<_> = ob
-                    .asks
-                    .iter()
-                    .map(|order| {
-                        (
-                            ob.price_to_decimal(order.limit_price),
-                            ob.qty_to_decimal(order.order_qty),
-                        )
-                    })
-                    .collect();
-                let bids: Vec<_> = ob
-                    .bids
-                    .iter()
-                    .map(|order| {
-                        (
-                            ob.price_to_decimal(order.limit_price),
-                            ob.qty_to_decimal(order.order_qty),
-                        )
-                    })
-                    .collect();
-                screen.draw(channel, &asks, &bids, ob.timestamp)?;
+    loop {
+        tokio::select! {
+            biased;
+            event = recv_ui(&mut ui_events) => {
+                match event {
+                    UiEvent::Quit => break,
+                    UiEvent::Resize => screen.redraw()?,
+                }
             }
-            Err(e) => {
-                return Err(e.to_string());
+            incoming = receiver.recv() => {
+                let Some(msg) = incoming else {
+                    break;
+                };
+                match mirror.on_message(&msg) {
+                    Ok(_) => {
+                        if !screen.note_update(channel) {
+                            continue;
+                        }
+                        let ob = mirror.get_order_book().expect("No order book");
+                        let asks = to_decimal_orders(ob, &ob.asks);
+                        let bids = to_decimal_orders(ob, &ob.bids);
+                        screen.draw(channel, &asks, &bids, ob.timestamp)?;
+                    }
+                    Err(e) => {
+                        return Err(e.to_string());
+                    }
+                }
             }
         }
     }
     Ok(())
+}
+
+async fn recv_ui(events: &mut Option<mpsc::UnboundedReceiver<UiEvent>>) -> UiEvent {
+    match events {
+        Some(events) => events.recv().await.unwrap_or(UiEvent::Quit),
+        None => pending().await,
+    }
+}
+
+fn to_decimal_orders(
+    ob: &order_book::OrderBook,
+    orders: &order_book::Orders,
+) -> Vec<(rust_decimal::Decimal, rust_decimal::Decimal)> {
+    orders
+        .iter()
+        .map(|order| {
+            (
+                ob.price_to_decimal(order.limit_price),
+                ob.qty_to_decimal(order.order_qty),
+            )
+        })
+        .collect()
 }
 
 #[tokio::main]
@@ -73,25 +97,47 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
     let qty_scale = 8;
 
     let (sender, receiver) = mpsc::unbounded_channel::<String>();
-    let (reader_res, updater_res) = tokio::join!(
-        tokio::spawn(obook_reader(
-            api_key, api_secret, channel, max_depth, sender
-        )),
-        tokio::spawn(obook_updater(
-            channel,
-            max_depth,
-            price_scale,
-            qty_scale,
-            receiver
-        )),
-    );
+    let mut reader = tokio::spawn(obook_reader(
+        api_key, api_secret, channel, max_depth, sender,
+    ));
+    let mut updater = tokio::spawn(obook_updater(
+        channel,
+        max_depth,
+        price_scale,
+        qty_scale,
+        receiver,
+    ));
 
-    if let Err(e) = reader_res? {
+    // `Screen` restores the terminal when the updater task returns. Abort the reader
+    // so quit and apply errors exit instead of leaving the socket open.
+    let (reader_res, updater_res) = tokio::select! {
+        res = &mut reader => {
+            let updater_res = updater.await;
+            (res, updater_res)
+        }
+        res = &mut updater => {
+            reader.abort();
+            let reader_res = reader.await;
+            (reader_res, res)
+        }
+    };
+
+    if let Err(e) = task_result(reader_res)? {
         eprintln!("Error in reader: {e}");
     }
-    if let Err(e) = updater_res? {
+    if let Err(e) = task_result(updater_res)? {
         eprintln!("Error in updater: {e}");
     }
 
     Ok(())
+}
+
+fn task_result(
+    joined: Result<Result<(), String>, JoinError>,
+) -> Result<Result<(), String>, Box<dyn Error>> {
+    match joined {
+        Ok(result) => Ok(result),
+        Err(err) if err.is_cancelled() => Ok(Ok(())),
+        Err(err) => Err(err.into()),
+    }
 }
