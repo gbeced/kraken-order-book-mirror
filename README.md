@@ -1,4 +1,6 @@
-# rust-order-book-mirror
+# Kraken Order Book Mirror
+
+[![CodSpeed Badge](https://img.shields.io/endpoint?url=https://app.codspeed.io//badge.json)](https://app.codspeed.io//gbeced/kraken-order-book-mirror?utm_source=badge)
 
 ## Live client
 
