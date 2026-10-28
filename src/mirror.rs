@@ -90,11 +90,9 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
         env::var("KRAKEN_API_KEY").map_err(|_| "KRAKEN_API_KEY must be set".to_string())?;
     let api_secret =
         env::var("KRAKEN_API_SECRET").map_err(|_| "KRAKEN_API_SECRET must be set".to_string())?;
-    let channel = "BTC/USD";
+    let (channel, price_scale, qty_scale) = ("BTC/USD", 1, 8);
+    // let (channel, price_scale, qty_scale) = ("ETH/USD", 2, 8);
     let max_depth = 1000;
-    // BTC/USD tick is 0.1 and the quantity step is 1e-8.
-    let price_scale = 1;
-    let qty_scale = 8;
 
     let (sender, receiver) = mpsc::unbounded_channel::<String>();
     let mut reader = tokio::spawn(obook_reader(
