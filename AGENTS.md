@@ -1,28 +1,41 @@
 # rust-order-book-mirror
 
-Tokio binary that authenticates to Kraken, subscribes to the WebSocket v2 `level3` channel, and maintains a local order-by-order book. `mirror::obook_updater` applies each frame. `tui::Screen` paints order-book cards (mid, spread, microprice, imbalance, 0.5% and 1% depth, updates per second, and age). The book stays in memory for the process lifetime. The binary does not send orders.
+Tokio binary that authenticates to Kraken, subscribes to the WebSocket v2 `level3` channel for a pair given on the command line, and maintains a local order-by-order book. `cmds::mirror` applies each frame. `tui::Screen` paints order-book cards (mid, spread, microprice, imbalance, 0.5% and 1% depth, updates per second, and age). The book stays in memory for the process lifetime. The binary does not send orders.
 
-One package, edition 2024. Requires rustc 1.85+. The binary is the product. A library target exists so the CodSpeed benches can call the crate. Not a monorepo.
+One package, edition 2024. Requires rustc 1.85+. The binary is the product. A library target exists so the benches, the integration tests, and `main.rs` can call the crate. Not a monorepo.
 
 ## Layout
 
-- `src/lib.rs` — declares `bench`, `kraken`, `mirror`, and crate-private `tui`. `kraken` stays private to the crate.
-- `src/main.rs` — dispatch only. A `bench` argument runs `bench::run()`. Otherwise `mirror::run()`.
+- `src/lib.rs` — `pub mod cmds; mod common; mod config; pub mod kraken; mod tui;`. `common`, `config`, and `tui` stay crate-private.
+- `src/main.rs` — clap CLI (`derive`) and dispatch only. Subcommands: `mirror PAIR [DEPTH]` and `bench FILE PAIR [DEPTH]`. `DEPTH` is a positional argument and defaults to `1000`. There is no `--depth` flag. A commented-out `Dump` variant is a stub.
+- `src/cmds/mod.rs` — `pub mod bench; pub mod mirror;`
+- `src/cmds/mirror.rs` — live session. `run` reads credentials, fetches pair info, spawns the reader and the updater on an unbounded `mpsc`. The updater owns `OrderBookMirror` and `tui::Screen`.
+- `src/cmds/bench.rs` — replay of a captured `level3` log through `OrderBookMirror::on_message`. The file and the pair are required. The pair is only used for the REST precision lookup. A debug build warns. The first apply error prints a partial report and exits 1. `replay` is the sum-of-nanos helper for callers.
+- `src/cmds/dump.rs` — untracked scratch file. Fully commented out and not declared in `cmds/mod.rs`. It is not part of the build.
+- `src/config.rs` — `get_credentials` reads `KRAKEN_API_KEY` / `KRAKEN_API_SECRET`. Only `mirror` calls it.
+- `src/common/json_utils.rs` — `JsonScanner`, a byte scanner. `top_level_plain_string(key)` returns the value of a top-level plain-string key without walking past it.
+- `src/tui.rs` — panel metrics, formatting, and ratatui redraw. `Screen` is the only public item. It receives decimal price and quantity pairs and does not import `level3`. Cards are a vertical stack of bordered blocks, one per symbol. No unit tests.
+- `src/kraken/mod.rs` — `pub mod level3; pub mod rest_client; mod sign;`
+- `src/kraken/rest_client.rs` — `get_websocket_auth_token` (private, signed) and `get_pair_info` (public `AssetPairs`).
+- `src/kraken/sign.rs` — REST HMAC (`get_signature`). Private module.
+- `src/kraken/level3/mod.rs` — `pub mod mirror; pub mod order_book; pub mod units; pub mod websockets; mod wire;`
+- `src/kraken/level3/websockets.rs` — connect, subscribe, forward `level3` text frames. Holds the private `is_channel_level3`, built on `JsonScanner`.
+- `src/kraken/level3/wire.rs` — private serde types: `Envelope`, `Payload<T>`, `WireOrder`, `WireOrderEvent`, `EventType`.
+- `src/kraken/level3/units.rs` — `to_units`, `to_decimal`, `serialize_units`.
+- `src/kraken/level3/order_book.rs` — `Order`, `Orders` (sorted vec), `OrderBook`.
+- `src/kraken/level3/mirror.rs` — `OrderBookMirror` state machine, apply, checksum.
 - `benches/mirror.rs` — CodSpeed/Divan harness. Eighteen `on_update` cases. Each applies one ask event to a book built from a 100-level snapshot. The snapshot apply is outside the timer. Cases cross `add` / `modify` / `delete`, ask level 0 / 50 / 99, and 1 or 4 orders per level.
-- `src/bench.rs` — offline replay of a captured `level3` log through `OrderBookMirror::on_message`. The messages file is required. Default depth `100`. `get_message_type` only labels snapshot vs update timings. A debug build warns. The first apply error prints a partial report and exits 1.
-- `src/mirror.rs` — reads `KRAKEN_API_KEY` / `KRAKEN_API_SECRET`, spawns the reader and the updater on an unbounded `mpsc`. The updater calls `tui::Screen`.
-- `src/tui.rs` — panel metrics, formatting, and ratatui redraw. `Screen` is the only public item. It receives decimal price and quantity pairs and does not import `level3`. Cards are a vertical stack of bordered blocks. The live client draws one card and always takes the terminal.
-- `src/kraken/mod.rs` — `pub(crate) mod json_utils; pub mod level3; mod utils; pub mod websockets;`
-- `src/kraken/websockets.rs` — REST token, connect, subscribe, forward `level3` text frames
-- `src/kraken/json_utils.rs` — byte scans: `is_channel_level3` and `get_message_type`. `pub(crate)` so `bench` can call the type scan. The read loop uses the channel scan.
-- `src/kraken/level3.rs` — book types, mirror state machine, apply, checksum
-- `src/kraken/utils.rs` — REST HMAC (`get_signature`). Private module
+- `benches/to_units.rs`, `benches/serialize_units.rs` — Divan micro-benches for `units::to_units` and `units::serialize_units`. All three are `[[bench]]` entries with `harness = false`.
+- `tests/mirror.rs` — integration tests over the fixtures, using depth `10` and scales `1` / `8`.
 - `tests/data/` — offline fixtures: `level3_snapshot.json`, `level3_update_1.json`, `level3_update_2.json`, `btc_usd_stream.log`
+- `env.example` — empty `KRAKEN_API_KEY` / `KRAKEN_API_SECRET` template.
 - `Cargo.toml` / `Cargo.lock` — crate `rust-order-book-mirror`
 
-There is no `tests/*.rs` integration crate and no `rustfmt.toml` / `clippy.toml` / `rust-toolchain.toml`. Unit tests live in `#[cfg(test)]` modules in `json_utils`, `utils`, `level3`, `tui`, and `bench`. CI is `.github/workflows/codspeed.yml` only: CPU simulation of the Divan benches, triggered on `workflow_dispatch`, push to `master`, and pull requests. `README.md` documents how to run the live client, the local bench, and that CodSpeed workflow. It also notes that the live client passes BTC/USD price scale 1 and quantity scale 8, and that the book stores counts of those increments.
+Untracked local files `benchmark.md` and `orderbook-ui-guidelines.md` are scratch. Do not commit them.
 
-`json_utils` and `utils` are declared only in `kraken/mod.rs`. `utils` is private. `json_utils` is `pub(crate)`. Modules inside `kraken` call `super::json_utils` and `super::utils`. `bench` calls `crate::kraken::json_utils`. A compiler hint to add either module in `main.rs` is wrong.
+There is no `rustfmt.toml` / `clippy.toml` / `rust-toolchain.toml`. Unit tests live in `#[cfg(test)]` modules in `cmds::bench`, `kraken::sign`, `kraken::level3::{units, order_book, mirror, websockets}`. CI is `.github/workflows/codspeed.yml` only: `cargo codspeed build` then CPU simulation of the Divan benches, triggered on `workflow_dispatch`, push to `master`, and pull requests. `README.md` documents the live client and the bench command, but it is stale (see Known drift).
+
+`sign` is private to `kraken`; `rest_client` calls it as `super::sign`. `wire` is private to `level3`. `is_channel_level3` is private to `level3/websockets.rs`. `common` and `config` are declared only in `lib.rs`. A compiler hint to add a module in `main.rs` is wrong, since `main.rs` uses the library crate.
 
 ## Setup
 
@@ -42,21 +55,22 @@ Never commit `.env`, or secrets.
 | --- | --- |
 | `cargo check` | Typecheck |
 | `cargo build` | Debug build |
-| `cargo test` | Unit tests in `json_utils`, `utils`, `level3`, `tui`, and `bench`. No network |
+| `cargo test` | Unit tests plus `tests/mirror.rs`. No network |
 | `cargo fmt` | rustfmt, default config |
 | `cargo clippy` | Lints, no project config |
-| `cargo run` | Long-running **live** client |
-| `cargo run --release -- bench FILE` | Offline replay of `FILE`. Default depth `100` |
-| `cargo bench` | Release Divan benches: one-update mirror cases, and the unit benches |
+| `cargo run -- mirror BTC/USD [DEPTH]` | Long-running **live** client. Default depth `1000` |
+| `cargo run --release -- bench FILE PAIR [DEPTH]` | Replay of `FILE`. Default depth `1000`. **Needs network** for the pair lookup |
+| `cargo bench` | Release Divan benches: `mirror`, `to_units`, `serialize_units` |
 
-`cargo run` with no arguments calls Kraken REST and `wss://ws-l3.kraken.com/v2`. `cargo run -- bench` stays offline. Use `cargo check` and `cargo test` to verify a change. Run the live client only when the task needs a real session.
+`mirror` calls Kraken REST (`AssetPairs`, then `GetWebSocketsToken`) and `wss://ws-l3.kraken.com/v2`. `bench` needs no API keys, but it still calls the public `AssetPairs` endpoint. The replay itself is offline. `DEPTH` must match the depth that produced the replayed file. Use `cargo check` and `cargo test` to verify a change. Run the live client only when the task needs a real session.
 
 ## Runtime
 
-1. `mirror::run` reads the two env vars and runs two tasks. The reader sends raw `level3` text frames. The updater owns `OrderBookMirror`. When the updater returns, `run` aborts the reader.
-2. Token: POST `https://api.kraken.com/0/private/GetWebSocketsToken`. Body is the hand-built form `nonce={nonce}`. `utils::get_signature` is SHA256 of `nonce` concatenated with that body, then HMAC-SHA512 of `url_path || sha256` using the base64-decoded API secret. Headers are `API-Key` and `API-Sign` (base64 HMAC). `TokenResult` stores `token`. The `expires` field is commented out and is not deserialized.
-3. Connect to `wss://ws-l3.kraken.com/v2` (native-tls via tokio-tungstenite). Tungstenite answers WebSocket ping itself. The read loop ignores non-text messages.
-4. Subscribe. Symbol `BTC/USD` and depth `1000` are hardcoded in `mirror.rs`. The reader and the updater both receive that depth. `snapshot: true` is hardcoded in `src/kraken/websockets.rs`:
+1. `cmds::mirror::run` reads the two env vars, calls `rest_client::get_pair_info(pair)`, then runs two tasks. The reader sends raw `level3` text frames. The updater owns `OrderBookMirror` and the `Screen`. When the updater returns, `run` aborts the reader. When the reader returns first, `run` waits for the updater.
+2. Pair info: GET `https://api.kraken.com/0/public/AssetPairs?pair=PAIR`. It takes the first entry in the result map. `pair_decimals` becomes the price scale and `lot_decimals` the quantity scale. `PairInfo` calls them `quote_precision` and `base_precision`. A Kraken error array or an empty result is an error. The scales are not hardcoded.
+3. Token: POST `https://api.kraken.com/0/private/GetWebSocketsToken`. Body is the hand-built form `nonce={nonce}`. `sign::get_signature` is SHA256 of `nonce` concatenated with that body, then HMAC-SHA512 of `url_path || sha256` using the base64-decoded API secret. Headers are `API-Key` and `API-Sign` (base64 HMAC). `TokenResult` stores `token`. The `expires` field is commented out and is not deserialized.
+4. Connect to `wss://ws-l3.kraken.com/v2` (native-tls via tokio-tungstenite). Tungstenite answers WebSocket ping itself. The read loop ignores non-text messages.
+5. Subscribe. Symbol and depth come from the CLI and pass through `connect_and_dispatch_level3`. `snapshot: true` is hardcoded in `src/kraken/level3/websockets.rs`:
 
    ```json
    {
@@ -71,9 +85,9 @@ Never commit `.env`, or secrets.
    }
    ```
 
-   `OrderBookMirror::new` is called with that depth (`1000`), price scale `1`, and quantity scale `8`. The subscribe depth and the `new` depth must stay equal. The live client passes those BTC/USD scales; do not hardcode them inside `level3`.
-5. `json_utils::is_channel_level3` scans the top-level JSON object for a plain `channel` string equal to `level3`. When that key is first, the scan returns without walking `data`. Heartbeat, status, and subscribe/unsubscribe acks are dropped. Acks nest `"channel":"level3"` under `result` or `params`, and a nested value does not match.
-6. The updater calls `OrderBookMirror::on_message`. On success it calls `Screen::note_update` with the symbol, which records that book's one-second update rate and reports whether a paint is due (immediately on the first attempt, then at most every 100ms). When a paint is not due, the updater skips decimal conversion and `draw`. When it is due, the updater `expect`s the book, converts each order with `OrderBook::price_to_decimal` and `OrderBook::qty_to_decimal`, and passes those pairs to `Screen::draw`. `draw` paints a ratatui fullscreen alternate screen: bordered cards stacked from the top, one per symbol. Each card shows mid, spread, microprice, imbalance, 0.5% and 1% depth, that book's updates per second, and age. Age is `Utc::now()` minus the frame timestamp, computed in `tui` at paint time. A book with no best price, a zero mid, a zero touch, or zero totals skips the paint and does not move the throttle stamp. That frame still counts in the rate window. `q` or Ctrl-C restores the terminal and aborts the reader. The first apply error returns from the updater task, which also aborts the reader. A successful message that left no book panics on that `expect`. Close or a read error returns from the reader. No reconnect and no token refresh.
+   `OrderBookMirror::new` is called with the same depth plus the two scales from step 2. The subscribe depth and the `new` depth must stay equal. Do not hardcode scales inside `level3`.
+6. `is_channel_level3` scans the top-level JSON object for a plain `channel` string equal to `level3`. When that key is first, the scan returns without walking `data`. Heartbeat, status, and subscribe/unsubscribe acks are dropped. Acks nest `"channel":"level3"` under `result` or `params`, and a nested value does not match.
+7. The updater `select!`s (biased) on UI events and on the frame receiver. `Quit` (`q` or Ctrl-C) breaks the loop. `Resize` calls `Screen::redraw`. For each frame it calls `OrderBookMirror::on_message`. On success it calls `Screen::note_update` with the pair, which records that book's one-second update rate and reports whether a paint is due (immediately on the first attempt, then at most every 100ms). When a paint is not due, the updater skips decimal conversion and `draw`. When it is due, the updater `expect`s the book, converts each order with `OrderBook::price_to_decimal` and `OrderBook::qty_to_decimal`, and passes those pairs to `Screen::draw`. `draw` paints a ratatui fullscreen alternate screen: bordered cards stacked from the top, one per symbol. Each card shows mid, spread, microprice, imbalance, 0.5% and 1% depth, that book's updates per second, and age. Age is `Utc::now()` minus the frame timestamp, computed in `tui` at paint time. A book with no best price, a zero mid, a zero touch, or zero totals skips the paint and does not move the throttle stamp. That frame still counts in the rate window. `Screen`'s `Drop` stops the input thread and restores the terminal. The first apply error returns from the updater task, which also aborts the reader. A successful message that left no book panics on that `expect`. Close or a read error returns from the reader. A closed frame channel ends the updater. `run` prints `Error in reader:` / `Error in updater:` with `eprintln!` after the terminal is restored. No reconnect and no token refresh.
 
 Kraken WebSocket tokens last about 15 minutes. `level3` requires a token and uses `wss://ws-l3.kraken.com/v2`. The public L2 `book` channel on `wss://ws.kraken.com/v2` is a different feed.
 
@@ -89,35 +103,42 @@ References:
 
 `on_message` deserializes the frame as `UpdateMsg` first, then as `SnapshotMsg`. `Order` has no `event` field, so an update payload also deserializes as a snapshot; the update attempt has to stay first. `channel` and `type` are not struct fields. A frame that matches neither returns `"Unexpected message"` and leaves the state unchanged. `data` is a `Vec` of one book per subscribed symbol. Fixtures are full frames (`channel` / `type` / `data`), including compact one-line frames in `btc_usd_stream.log`.
 
-`Order.limit_price` and `Order.order_qty` are public `u64` base-unit counts. `Order` does not convert to `Decimal`. `OrderBook::price_to_decimal` and `OrderBook::qty_to_decimal` do, using the `u8` scales stored on that book (`Decimal::from_i128_with_scale`). Wire JSON still parses with `rust_decimal` arbitrary precision into private `WireOrder` / `WireOrderEvent` values. `process_snapshot` and `process_update` convert those to units with `context.price_scale` and `context.qty_scale` before the state machine sees them. A negative value, a value that is not a multiple of the increment, or a count that does not fit in `u64` fails that conversion and leaves the state unchanged. Timestamps stay `chrono::DateTime<Utc>`. Comparisons, `partition_point`, and `find_price_level` use the `u64` fields. Do not put `Decimal` back on `Order`, and do not hardcode the scales in `level3`. The live client and the bench pass `1` and `8` because the feed is BTC/USD (tick `0.1`, step `1e-8`).
+`Order.limit_price` and `Order.order_qty` are public `u64` base-unit counts. `Order` does not convert to `Decimal`. `OrderBook::price_to_decimal` and `OrderBook::qty_to_decimal` do, using the `u8` scales stored on that book (`units::to_decimal`). Wire JSON still parses with `rust_decimal` arbitrary precision into private `wire::WireOrder` / `wire::WireOrderEvent` values. `process_snapshot` and `process_update` convert those to units with `context.price_scale` and `context.qty_scale` (`Snapshot::try_from_wire`, `Update::try_from_wire`) before the state machine sees them. A negative value, a value that is not a multiple of the increment, or a count that does not fit in `u64` fails that conversion and leaves the state unchanged. Timestamps stay `chrono::DateTime<Utc>`. Comparisons, `partition_point`, and `find_price_level` use the `u64` fields. Do not put `Decimal` back on `Order`, and do not hardcode the scales in `level3`. The scales come from the pair lookup. The fixtures, the benches, and `tests/mirror.rs` use `1` and `8` because they are BTC/USD (tick `0.1`, step `1e-8`).
 
 Side order, which the CRC queue depends on:
 
 - Asks: `limit_price` ascending, then `timestamp` ascending.
 - Bids: `limit_price` descending, then `timestamp` ascending.
 - `insert_order` uses `partition_point` with a strict `<` on timestamp, so a later timestamp appends after earlier orders at that price.
-- `delete` and `modify` find the price level with `partition_point`, then scan that level for `order_id`. `modify` with the same timestamp writes `order_qty` in place. A later timestamp removes and reinserts inside that price level. An earlier timestamp hits `assert!`. On the wire, a price change is `delete` then `add`.
+- `remove_order` and `modify_order` go through `find_order`, which finds the price level with `partition_point`, then scans that level for `order_id`. `modify_order` with the same timestamp writes `order_qty` in place. A later timestamp removes and reinserts inside that price level. An earlier timestamp hits `assert!`. On the wire, a price change is `delete` then `add`.
 
-After each side's events, truncate that side to `max_depth` distinct price levels (asks, then bids). Every order at the boundary price stays. Kraken omits `delete` for levels that fall out of the top N. Skipping the truncate duplicates `order_id`s when those levels return. Depth `0` drops every order.
+After each side's events, `truncate_price_level` cuts that side to `max_depth` distinct price levels (asks, then bids). Every order at the boundary price stays. Kraken omits `delete` for levels that fall out of the top N. Skipping the truncate duplicates `order_id`s when those levels return. Depth `0` drops every order.
 
 `OrderBook.timestamp` is copied from the snapshot, then replaced with `update.timestamp` after a checksum match. There is no stale-update check. A checksum or apply failure returns before that assignment.
 
-The checksum hashes every order on the top 10 price levels per side (asks, then bids), ignoring levels past the 10th price and ignoring the subscribed depth. Each stored count is written as its decimal digits, a zero count writes nothing, then CRC32 (`crc32fast`). On this feed the wire scale matches the tick and the step, so those digits are the Kraken checksum string (decimal point and leading zeros removed, trailing zeros kept). Subscribed depth must stay at least 10 so the local book can contain the levels Kraken hashes. Building the book copies asks, bids, and timestamp and drops `Payload.checksum`. Updates compare a fresh CRC against `update.checksum`. A checksum or apply failure sets `Invalid`.
+The checksum hashes every order on the top 10 price levels per side (asks, then bids), ignoring levels past the 10th price and ignoring the subscribed depth. Each stored count is written as its decimal digits (`units::serialize_units`), a zero count writes nothing, then CRC32 (`crc32fast`). When the wire scale matches the tick and the step, those digits are the Kraken checksum string (decimal point and leading zeros removed, trailing zeros kept). Subscribed depth must stay at least 10 so the local book can contain the levels Kraken hashes. Building the book copies asks, bids, and timestamp and drops `Payload.checksum`. Updates compare a fresh CRC against `update.checksum`. A checksum or apply failure sets `Invalid`.
 
 `Snapshot` is a type alias for `Payload<Order>`. An impl on that alias does not apply to `Payload<OrderEvent>` (`Update`). JSON frames deserialize as `Envelope<Payload<WireOrder>>` and `Envelope<Payload<WireOrderEvent>>`, then convert into those unit payloads. `Envelope<T>` is the `{ data: [...] }` frame. The maintained book is `OrderBook` (asks, bids, timestamp, price scale, quantity scale).
 
 ## Conventions
 
-- Match surrounding style (4-space indent). `eprintln!` for reader and updater errors. The panel goes to stdout from `tui`.
-- Keep `main.rs` as the dispatch entry. The live session stays in `mirror.rs`. Panel rendering, formatting, and redraw stay in `src/tui.rs`. Kraken protocol code stays under `src/kraken/`.
-- New tests: `#[cfg(test)]` next to the code. Fixtures go in `tests/data/` and are read via `CARGO_MANIFEST_DIR`. No live network. No real API keys in fixtures.
+- Match surrounding style (4-space indent). `eprintln!` for reader and updater errors. The panel goes through `tui`.
+- Keep `main.rs` as the CLI and dispatch entry. Each subcommand lives in `src/cmds/`. Panel rendering, formatting, and redraw stay in `src/tui.rs`. Kraken protocol and REST code stays under `src/kraken/`. Credentials stay in `src/config.rs`.
+- New tests: `#[cfg(test)]` next to the code, or `tests/*.rs` for whole-mirror behavior. Fixtures go in `tests/data/` and are read via `CARGO_MANIFEST_DIR`. No live network. No real API keys in fixtures.
 - `get_websocket_auth_token` builds the form body by hand. Leave that as it is unless the task is the auth request.
+- Commented-out code in `main.rs`, `rest_client.rs`, `websockets.rs`, and `cmds/dump.rs` is the author's scratch. Leave it alone unless asked.
 
 ## Security
 
 - Never log, print, or commit `KRAKEN_API_KEY`, `KRAKEN_API_SECRET`, or WebSocket tokens.
 - Do not weaken nonce/HMAC handling.
 - Do not add order-entry or trading methods unless explicitly asked.
+
+## Known drift
+
+- `README.md` still describes the old interface: bare `cargo run`, `bench FILE [--depth N]`, a default depth of `100`, a hardcoded BTC/USD subscription, and hardcoded scales. The real CLI is above. Update it only when asked.
+- `get_pair_info` takes the first entry of the `AssetPairs` result and uses `lot_decimals` as the level3 quantity scale. If a pair's feed has finer quantities, `to_units` fails with `value is not a multiple of the increment`.
+- `tests/mirror.rs::mirror_checksum_mismatch_after_update` replays the whole stream and asserts the final timestamp. It does not test a mismatch.
 
 ## Boundaries
 
@@ -128,9 +149,9 @@ The checksum hashes every order on the top 10 price levels per side (asks, then 
 
 **Ask first**
 
-- Changing the subscribed symbol, depth, snapshot flag, or the BTC/USD price and quantity scales. The subscribe `depth` and the depth passed to `OrderBookMirror::new` must stay the same value.
+- Changing the `snapshot` flag, the default depth, or how scales are derived. The subscribe `depth` and the depth passed to `OrderBookMirror::new` must stay the same value.
 - Adding reconnect or token refresh.
-- Adding dependencies, CI, a README, or reformatting the whole crate.
+- Adding dependencies, CI, or reformatting the whole crate.
 
 **Never**
 
