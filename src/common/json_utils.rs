@@ -1,23 +1,10 @@
-// Faster, but error prone.
-// pub fn is_channel_level3(msg: &str) -> bool {
-//     const PREFIX: &str = r#"{"channel":"level3","type":""#;
-//     msg.starts_with(PREFIX)
-// }
-
-// Top-level "channel" must be the plain string "level3".
-// A byte scan stops at that key, so a depth-100 snapshot is not parsed twice.
-// Nested "channel" (subscribe acks) does not match. Key order and whitespace do.
-pub fn is_channel_level3(msg: &str) -> bool {
-    JsonScanner::new(msg.as_bytes()).top_level_plain_string(b"channel") == Some("level3")
-}
-
-struct JsonScanner<'a> {
+pub struct JsonScanner<'a> {
     bytes: &'a [u8],
     i: usize,
 }
 
 impl<'a> JsonScanner<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
+    pub fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, i: 0 }
     }
 
@@ -89,7 +76,7 @@ impl<'a> JsonScanner<'a> {
             .and_then(|(plain, content)| plain.then_some(content))
     }
 
-    fn top_level_plain_string(&mut self, key: &[u8]) -> Option<&'a str> {
+    pub fn top_level_plain_string(&mut self, key: &[u8]) -> Option<&'a str> {
         self.skip_ws();
         if !self.eat(b'{') {
             return None;
@@ -203,66 +190,5 @@ impl<'a> JsonScanner<'a> {
             self.i += 1;
         }
         Some(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::Path;
-
-    fn fixture(name: &str) -> String {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/data")
-            .join(name);
-        std::fs::read_to_string(path).unwrap()
-    }
-
-    #[test]
-    fn accepts_level3_frames() {
-        let samples = [
-            r#"{"channel":"level3","type":"snapshot","data":[]}"#,
-            r#"{"channel":"level3","type":"update","data":[]}"#,
-            "{\n  \"channel\" : \"level3\"\n}",
-            r#"{"type":"update","channel":"level3","data":[]}"#,
-            r#"{"data":[{"note":"}"}],"channel":"level3"}"#,
-            r#"{"note":"\"channel\":\"level3\"","channel":"level3"}"#,
-            r#"{"result":{"channel":"heartbeat"},"channel":"level3"}"#,
-            // Stop at the channel key. The rest of the frame is not scanned.
-            r#"{"channel":"level3","data":[}"#,
-        ];
-        for sample in samples {
-            assert!(is_channel_level3(sample), "{sample}");
-        }
-        for name in [
-            "level3_snapshot.json",
-            "level3_update_1.json",
-            "level3_update_2.json",
-        ] {
-            assert!(is_channel_level3(&fixture(name)), "{name}");
-        }
-    }
-
-    #[test]
-    fn rejects_other_frames() {
-        let samples = [
-            "",
-            "[]",
-            "{",
-            "{}",
-            r#"{"channel":"#,
-            r#"{"channel":"heartbeat"}"#,
-            r#"{"channel":"status","type":"update","data":[]}"#,
-            r#"{"channel":"level3 "}"#,
-            r#"{"channel":"\u006cevel3"}"#,
-            r#"{"data":[{"channel":"level3"}]}"#,
-            r#"{"note":"\"channel\":\"level3\""}"#,
-            r#"{"method":"subscribe","result":{"channel":"level3","symbol":"BTC/USD"},"success":true}"#,
-            r#"{"method":"unsubscribe","result":{"channel":"level3","symbol":"BTC/USD"},"success":true}"#,
-            r#"{"method":"subscribe","params":{"channel":"level3","symbol":["BTC/USD"]},"success":true}"#,
-        ];
-        for sample in samples {
-            assert!(!is_channel_level3(sample), "{sample}");
-        }
     }
 }

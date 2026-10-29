@@ -1,3 +1,5 @@
+use rust_order_book_mirror::kraken::level3::units;
+
 fn main() {
     divan::main();
 }
@@ -6,7 +8,7 @@ fn bench_serialize(bencher: divan::Bencher, units: u64) {
     let mut out = String::with_capacity(20);
     bencher.bench_local(|| {
         out.clear();
-        rust_order_book_mirror::level3::units::serialize_units(divan::black_box(units), &mut out);
+        units::serialize_units(divan::black_box(units), &mut out);
         out.len()
     });
 }
