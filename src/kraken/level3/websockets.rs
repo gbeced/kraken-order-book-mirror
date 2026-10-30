@@ -21,6 +21,10 @@ fn is_channel_level3(msg: &str) -> bool {
         == Some("level3")
 }
 
+fn extract_error<'a>(msg: &'a str) -> Option<&'a str> {
+    json_utils::JsonScanner::new(msg.as_bytes()).top_level_plain_string(b"error")
+}
+
 pub async fn connect_and_dispatch_level3(
     api_key: &str,
     api_secret: &str,
@@ -56,6 +60,9 @@ pub async fn connect_and_dispatch_level3(
             Ok(Message::Text(text)) => {
                 if is_channel_level3(text.as_str()) {
                     sender.send(text.to_string())?;
+                }
+                else if let Some(error) = extract_error(text.as_str()) {
+                    return Err(error.into());
                 }
             }
             Ok(Message::Close(frame)) => {
@@ -115,4 +122,24 @@ mod tests {
             assert!(!is_channel_level3(sample), "{sample}");
         }
     }
+
+    #[test]
+    fn error_frames() {
+        let positive_samples = [
+            r#"{"error":"Subscription depth not supported","method":"subscribe"}"#,
+        ];
+        for sample in positive_samples {
+            assert_eq!(extract_error(sample).unwrap(), "Subscription depth not supported");
+        }
+
+        let negative_samples = [
+            r#"{"channel":"status","type":"update","data":[]}"#,
+        ];
+        for sample in negative_samples {
+            assert!(extract_error(sample).is_none());
+        }
+
+    }
+
+
 }
