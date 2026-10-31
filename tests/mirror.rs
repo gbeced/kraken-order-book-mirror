@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use rust_order_book_mirror::level3::mirror;
+    use rust_order_book_mirror::kraken::level3::mirror;
     use std::fs::File;
     use std::io::{BufRead, BufReader};
     use std::path::{Path, PathBuf};

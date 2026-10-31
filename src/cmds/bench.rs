@@ -1,3 +1,4 @@
+use crate::kraken::rest_client;
 use std::error::Error;
 use std::fs::File;
 use std::hint::black_box;
@@ -5,7 +6,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::level3::mirror;
+use crate::kraken::level3::mirror;
 
 #[derive(Debug)]
 struct Report {
@@ -20,20 +21,27 @@ struct MeasureError {
     partial: Report,
 }
 
-pub fn run() -> Result<(), Box<dyn Error>> {
+#[tokio::main]
+pub async fn run(path: String, pair: String, depth: usize) -> Result<(), Box<dyn Error>> {
     if cfg!(debug_assertions) {
         eprintln!(
             "warning: debug build timings are not comparable; use cargo run --release -- bench <file>"
         );
     }
 
-    let (path, depth) = parse_bench_args(std::env::args().skip(1))?;
+    let path = PathBuf::from(path);
     let messages = load_messages(&path)?;
     if messages.is_empty() {
         return Err(format!("no messages in {}", path.display()).into());
     }
+    let pair_info = rest_client::get_pair_info(&pair).await?;
 
-    match measure(&messages, depth) {
+    match measure(
+        &messages,
+        depth,
+        pair_info.quote_precision,
+        pair_info.base_precision,
+    ) {
         Ok(report) => {
             print_report(&path, depth, &report);
             Ok(())
@@ -44,40 +52,6 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             std::process::exit(1);
         }
     }
-}
-
-fn parse_bench_args(args: impl IntoIterator<Item = String>) -> Result<(PathBuf, usize), String> {
-    let mut args = args.into_iter();
-    if args.next().as_deref() != Some("bench") {
-        return Err("expected bench".to_string());
-    }
-
-    let mut path = None;
-    let mut depth = 100usize;
-
-    while let Some(arg) = args.next() {
-        if arg == "--depth" {
-            let value = args
-                .next()
-                .ok_or_else(|| "--depth needs a number".to_string())?;
-            depth = parse_depth(&value)?;
-        } else if let Some(value) = arg.strip_prefix("--depth=") {
-            depth = parse_depth(value)?;
-        } else if arg.starts_with('-') {
-            return Err(format!("unknown argument: {arg}"));
-        } else if path.is_none() {
-            path = Some(PathBuf::from(arg));
-        } else {
-            return Err(format!("unexpected argument: {arg}"));
-        }
-    }
-
-    let path = path.ok_or_else(|| "messages file is required".to_string())?;
-    Ok((path, depth))
-}
-
-fn parse_depth(value: &str) -> Result<usize, String> {
-    value.parse().map_err(|_| format!("invalid depth: {value}"))
 }
 
 pub fn load_messages(path: &Path) -> Result<Vec<String>, Box<dyn Error>> {
@@ -95,9 +69,14 @@ pub fn load_messages(path: &Path) -> Result<Vec<String>, Box<dyn Error>> {
     Ok(messages)
 }
 
-fn measure(messages: &[String], depth: usize) -> Result<Report, MeasureError> {
-    // Captures are BTC/USD: price tick 0.1, quantity step 1e-8.
-    let mut mirror = mirror::OrderBookMirror::new(depth, 1, 8);
+fn measure(
+    messages: &[String],
+    depth: usize,
+    price_scale: u8,
+    qty_scale: u8,
+) -> Result<Report, MeasureError> {
+    let mut mirror = mirror::OrderBookMirror::new(depth, price_scale, qty_scale);
+
     let mut update_nanos = Vec::with_capacity(messages.len());
 
     for (index, msg) in messages.iter().enumerate() {
@@ -133,8 +112,13 @@ fn measure(messages: &[String], depth: usize) -> Result<Report, MeasureError> {
 }
 
 // Sum of per-update nanos, plus one when the book is still present.
-pub fn replay(messages: &[String], depth: usize) -> Result<u128, Box<dyn Error>> {
-    match measure(messages, depth) {
+pub fn replay(
+    messages: &[String],
+    depth: usize,
+    price_scale: u8,
+    qty_scale: u8,
+) -> Result<u128, Box<dyn Error>> {
+    match measure(messages, depth, price_scale, qty_scale) {
         Ok(report) => {
             let sum: u128 = report.update_nanos.iter().map(|nanos| *nanos as u128).sum();
             Ok(sum + u128::from(report.book_present))
@@ -234,6 +218,6 @@ mod tests {
 
     #[test]
     fn replay_empty_is_zero() {
-        assert_eq!(replay(&[], 100).unwrap(), 0);
+        assert_eq!(replay(&[], 100, 1, 8).unwrap(), 0);
     }
 }

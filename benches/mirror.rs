@@ -1,6 +1,6 @@
 use std::fmt::Write;
 
-use rust_order_book_mirror::level3::mirror::OrderBookMirror;
+use rust_order_book_mirror::kraken::level3::mirror::OrderBookMirror;
 
 const DEPTH: usize = 100;
 const PRICE_SCALE: u8 = 1;

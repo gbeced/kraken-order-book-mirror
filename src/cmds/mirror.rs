@@ -1,31 +1,31 @@
-use super::level3::{mirror, order_book, websockets};
-use super::tui::{self, UiEvent};
-use std::env;
+use crate::config;
+use crate::kraken::level3::{mirror, order_book, websockets};
+use crate::kraken::rest_client;
+use crate::tui::{self, UiEvent};
 use std::error::Error;
 use std::future::pending;
 use tokio::sync::mpsc;
-use tokio::task::JoinError;
 
 async fn obook_reader(
     api_key: String,
     api_secret: String,
-    channel: &str,
-    max_depth: usize,
+    channel: String,
+    depth: usize,
     sender: mpsc::UnboundedSender<String>,
 ) -> Result<(), String> {
-    websockets::connect_and_dispatch_level3(&api_key, &api_secret, channel, max_depth, sender)
+    websockets::connect_and_dispatch_level3(&api_key, &api_secret, &channel, depth, sender)
         .await
         .map_err(|e| e.to_string())
 }
 
 async fn obook_updater(
-    channel: &str,
-    max_depth: usize,
+    channel: String,
+    depth: usize,
     price_scale: u8,
     qty_scale: u8,
     mut receiver: mpsc::UnboundedReceiver<String>,
 ) -> Result<(), String> {
-    let mut mirror = mirror::OrderBookMirror::new(max_depth, price_scale, qty_scale);
+    let mut mirror = mirror::OrderBookMirror::new(depth, price_scale, qty_scale);
     let mut screen = tui::Screen::new()?;
     let mut ui_events = screen.take_events();
 
@@ -44,13 +44,13 @@ async fn obook_updater(
                 };
                 match mirror.on_message(&msg) {
                     Ok(_) => {
-                        if !screen.note_update(channel) {
+                        if !screen.note_update(&channel) {
                             continue;
                         }
                         let ob = mirror.get_order_book().expect("No order book");
                         let asks = to_decimal_orders(ob, &ob.asks);
                         let bids = to_decimal_orders(ob, &ob.bids);
-                        screen.draw(channel, &asks, &bids, ob.timestamp)?;
+                        screen.draw(&channel, &asks, &bids, ob.timestamp)?;
                     }
                     Err(e) => {
                         return Err(e.to_string());
@@ -85,57 +85,37 @@ fn to_decimal_orders(
 }
 
 #[tokio::main]
-pub async fn run() -> Result<(), Box<dyn Error>> {
-    let api_key =
-        env::var("KRAKEN_API_KEY").map_err(|_| "KRAKEN_API_KEY must be set".to_string())?;
-    let api_secret =
-        env::var("KRAKEN_API_SECRET").map_err(|_| "KRAKEN_API_SECRET must be set".to_string())?;
-    let (channel, price_scale, qty_scale) = ("BTC/USD", 1, 8);
-    // let (channel, price_scale, qty_scale) = ("ETH/USD", 2, 8);
-    let max_depth = 1000;
+pub async fn run(pair: String, depth: usize) -> Result<(), Box<dyn Error>> {
+    let (api_key, api_secret) = config::get_credentials()?;
+    let pair_info = rest_client::get_pair_info(&pair).await?;
 
     let (sender, receiver) = mpsc::unbounded_channel::<String>();
-    let mut reader = tokio::spawn(obook_reader(
-        api_key, api_secret, channel, max_depth, sender,
+    let mut producer = tokio::spawn(obook_reader(
+        api_key,
+        api_secret,
+        pair.clone(),
+        depth,
+        sender,
     ));
-    let mut updater = tokio::spawn(obook_updater(
-        channel,
-        max_depth,
-        price_scale,
-        qty_scale,
+    let mut consumer = tokio::spawn(obook_updater(
+        pair,
+        depth,
+        pair_info.quote_precision,
+        pair_info.base_precision,
         receiver,
     ));
 
-    // `Screen` restores the terminal when the updater task returns. Abort the reader
-    // so quit and apply errors exit instead of leaving the socket open.
-    let (reader_res, updater_res) = tokio::select! {
-        res = &mut reader => {
-            let updater_res = updater.await;
-            (res, updater_res)
-        }
-        res = &mut updater => {
-            reader.abort();
-            let reader_res = reader.await;
-            (reader_res, res)
-        }
-    };
-
-    if let Err(e) = task_result(reader_res)? {
-        eprintln!("Error in reader: {e}");
-    }
-    if let Err(e) = task_result(updater_res)? {
-        eprintln!("Error in updater: {e}");
-    }
-
-    Ok(())
-}
-
-fn task_result(
-    joined: Result<Result<(), String>, JoinError>,
-) -> Result<Result<(), String>, Box<dyn Error>> {
-    match joined {
-        Ok(result) => Ok(result),
-        Err(err) if err.is_cancelled() => Ok(Ok(())),
-        Err(err) => Err(err.into()),
-    }
+    let res = tokio::select! {
+        res = & mut consumer => {
+            producer.abort();
+            let _ = producer.await;
+            res
+        },
+        res = & mut producer => {
+            consumer.abort();
+            let _ = consumer.await;
+            res
+        },
+    }?;
+    res.map_err(|e| e.into())
 }

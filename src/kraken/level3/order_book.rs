@@ -33,6 +33,10 @@ impl Orders {
         self.orders.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.orders.is_empty()
+    }
+
     pub fn iter<'a>(&'a self) -> std::slice::Iter<'a, Order> {
         self.orders.iter()
     }
