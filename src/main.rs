@@ -24,13 +24,13 @@ enum Command {
         depth: usize,
     },
     /// Dump the order book for a pair
-    // Dump {
-    //     /// Trading pair, e.g. BTC/USD
-    //     pair: String,
-    //     /// Book depth
-    //     #[arg(default_value_t = 1000)]
-    //     depth: u32,
-    // },
+    Dump {
+        /// Trading pair, e.g. BTC/USD
+        pair: String,
+        /// Book depth
+        #[arg(default_value_t = 1000)]
+        depth: usize,
+    },
     /// Run a benchmark from a file
     Bench {
         /// Input file
@@ -48,6 +48,7 @@ pub fn main() -> Result<(), Box<dyn Error>> {
 
     match cli.command {
         Command::Mirror { pair, depth } => cmds::mirror::run(pair, depth),
+        Command::Dump { pair, depth } => cmds::dump::run(pair, depth),
         Command::Bench { file, pair, depth } => cmds::bench::run(file, pair, depth),
     }
 }
