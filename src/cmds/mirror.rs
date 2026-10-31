@@ -5,7 +5,6 @@ use crate::tui::{self, UiEvent};
 use std::error::Error;
 use std::future::pending;
 use tokio::sync::mpsc;
-use tokio::task::JoinError;
 
 async fn obook_reader(
     api_key: String,
@@ -91,14 +90,14 @@ pub async fn run(pair: String, depth: usize) -> Result<(), Box<dyn Error>> {
     let pair_info = rest_client::get_pair_info(&pair).await?;
 
     let (sender, receiver) = mpsc::unbounded_channel::<String>();
-    let mut consumer = tokio::spawn(obook_reader(
+    let mut producer = tokio::spawn(obook_reader(
         api_key,
         api_secret,
         pair.clone(),
         depth,
         sender,
     ));
-    let mut producer = tokio::spawn(obook_updater(
+    let mut consumer = tokio::spawn(obook_updater(
         pair,
         depth,
         pair_info.quote_precision,
@@ -106,36 +105,17 @@ pub async fn run(pair: String, depth: usize) -> Result<(), Box<dyn Error>> {
         receiver,
     ));
 
-    // `Screen` restores the terminal when the updater task returns. Abort the reader
-    // so quit and apply errors exit instead of leaving the socket open.
-    let (consumer_res, producer_res) = tokio::select! {
-        res = &mut consumer => {
-            let updater_res = producer.await;
-            (res, updater_res)
-        }
-        res = &mut producer => {
+    let res = tokio::select! {
+        res = & mut consumer => {
+            producer.abort();
+            let _ = producer.await;
+            res
+        },
+        res = & mut producer => {
             consumer.abort();
-            let reader_res = consumer.await;
-            (reader_res, res)
-        }
-    };
-
-    if let Err(e) = task_result(consumer_res)? {
-        eprintln!("Error in reader: {e}");
-    }
-    if let Err(e) = task_result(producer_res)? {
-        eprintln!("Error in updater: {e}");
-    }
-
-    Ok(())
-}
-
-fn task_result(
-    joined: Result<Result<(), String>, JoinError>,
-) -> Result<Result<(), String>, Box<dyn Error>> {
-    match joined {
-        Ok(result) => Ok(result),
-        Err(err) if err.is_cancelled() => Ok(Ok(())),
-        Err(err) => Err(err.into()),
-    }
+            let _ = consumer.await;
+            res
+        },
+    }?;
+    res.map_err(|e| e.into())
 }
