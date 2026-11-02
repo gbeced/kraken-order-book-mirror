@@ -1,18 +1,18 @@
 # rust-order-book-mirror
 
-Tokio binary that authenticates to Kraken, subscribes to the WebSocket v2 `level3` channel for a pair given on the command line, and maintains a local order-by-order book. `cmds::mirror` applies each frame. `tui::Screen` paints an order-book dashboard (ladder, imbalance, depth, impact, L3 order stats, and feed health), with compact cards on small terminals. The book stays in memory for the process lifetime. The binary does not send orders.
+Tokio binary that authenticates to Kraken, subscribes to the WebSocket v2 `level3` channel for a pair given on the command line, and maintains a local order-by-order book. `cmds::dashboard` applies each frame. `tui::Screen` paints an order-book dashboard (ladder, imbalance, depth, impact, L3 order stats, and feed health), with compact cards on small terminals. The book stays in memory for the process lifetime. The binary does not send orders.
 
 One package, edition 2024. Requires rustc 1.85+. The binary is the product. A library target exists so the benches, the integration tests, and `main.rs` can call the crate. Not a monorepo.
 
 ## Layout
 
 - `src/lib.rs` — `pub mod cmds; mod common; mod config; pub mod kraken; mod tui;`. `common`, `config`, and `tui` stay crate-private.
-- `src/main.rs` — clap CLI (`derive`) and dispatch only. Subcommands: `mirror PAIR [DEPTH]`, `dump PAIR [DEPTH]`, and `bench FILE PAIR [DEPTH]`. `DEPTH` is a positional argument and defaults to `1000`. There is no `--depth` flag.
-- `src/cmds/mod.rs` — `pub mod bench; pub mod mirror; pub mod dump;`
-- `src/cmds/mirror.rs` — live session. `run` reads credentials, fetches pair info, spawns the reader and the updater on an unbounded `mpsc`. The updater owns `OrderBookMirror` and `tui::Screen`.
+- `src/main.rs` — clap CLI (`derive`) and dispatch only. Subcommands: `dashboard PAIR [DEPTH]`, `dump PAIR [DEPTH]`, and `bench FILE PAIR [DEPTH]`. `DEPTH` is a positional argument and defaults to `1000`. There is no `--depth` flag.
+- `src/cmds/mod.rs` — `pub mod bench; pub mod dashboard; pub mod dump;`
+- `src/cmds/dashboard.rs` — live session. `run` reads credentials, fetches pair info, spawns the reader and the updater on an unbounded `mpsc`. The updater owns `OrderBookMirror` and `tui::Screen`.
 - `src/cmds/bench.rs` — replay of a captured `level3` log through `OrderBookMirror::on_message`. The file and the pair are required. The pair is only used for the REST precision lookup. A debug build warns. The first apply error prints a partial report and exits 1. `replay` is the sum-of-nanos helper for callers.
 - `src/cmds/dump.rs` — live raw capture. `run` reads credentials, then prints each `level3` text frame to stdout, one per line, through the same `connect_and_dispatch_level3`. It does not fetch pair info, build a book, or open the TUI. Redirect stdout to produce a file for `bench`.
-- `src/config.rs` — `get_credentials` reads `KRAKEN_API_KEY` / `KRAKEN_API_SECRET`. `mirror` and `dump` call it.
+- `src/config.rs` — `get_credentials` reads `KRAKEN_API_KEY` / `KRAKEN_API_SECRET`. `dashboard` and `dump` call it.
 - `src/common/json_utils.rs` — `JsonScanner`, a byte scanner. `top_level_plain_string(key)` returns the value of a top-level plain-string key without walking past it.
 - `src/tui/` — crate-private. `Screen` is the only public item. It receives decimal price and quantity pairs and does not import `level3`. `mod.rs` holds `Screen`, the input thread, the paint throttle, and per-symbol `BookCard` state (ladders, flashes, 60s history, lag window, OFI window). `metrics.rs` is pure analytics (`Analysis`, `ladder`, `slippage_bps`, `ofi_step`, `percentile`). `render.rs` draws the dashboard for the focused symbol: header, ladder, imbalance, depth bands, impact, L3 stats, history. It has three modes by terminal size: full (≥120x32), medium (≥80x20), and `compact.rs` below that, which stacks one six-row card per symbol (best bid and ask, mid, micro offset, OFI, imbalance, depth) from the same `Analysis`. `format.rs` and `style.rs` hold helpers. Keys: `q`/Ctrl-C quit, `g` ladder grouping, `p` pause display, `Tab` next symbol. Unit tests live in `metrics`, `format`, `mod`, and `render` (the latter via ratatui `TestBackend`).
 - `src/kraken/mod.rs` — `pub mod level3; pub mod rest_client; mod sign;`
@@ -58,16 +58,16 @@ Never commit `.env`, or secrets.
 | `cargo test` | Unit tests plus `tests/mirror.rs`. No network |
 | `cargo fmt` | rustfmt, default config |
 | `cargo clippy` | Lints, no project config |
-| `cargo run -- mirror BTC/USD [DEPTH]` | Long-running **live** client. Default depth `1000` |
+| `cargo run -- dashboard BTC/USD [DEPTH]` | Long-running **live** client. Default depth `1000` |
 | `cargo run -- dump BTC/USD [DEPTH] > FILE` | Long-running **live** raw frame capture. Default depth `1000` |
 | `cargo run --release -- bench FILE PAIR [DEPTH]` | Replay of `FILE`. Default depth `1000`. **Needs network** for the pair lookup |
 | `cargo bench` | Release Divan benches: `mirror`, `to_units`, `serialize_units` |
 
-`mirror` and `dump` need API keys. `mirror` calls Kraken REST (`AssetPairs`, then `GetWebSocketsToken`) and `wss://ws-l3.kraken.com/v2`. `dump` skips `AssetPairs`. `bench` needs no API keys, but it still calls the public `AssetPairs` endpoint. The replay itself is offline. `DEPTH` must match the depth that produced the replayed file. Use `cargo check` and `cargo test` to verify a change. Run the live client only when the task needs a real session.
+`dashboard` and `dump` need API keys. `dashboard` calls Kraken REST (`AssetPairs`, then `GetWebSocketsToken`) and `wss://ws-l3.kraken.com/v2`. `dump` skips `AssetPairs`. `bench` needs no API keys, but it still calls the public `AssetPairs` endpoint. The replay itself is offline. `DEPTH` must match the depth that produced the replayed file. Use `cargo check` and `cargo test` to verify a change. Run the live client only when the task needs a real session.
 
 ## Runtime
 
-1. `cmds::mirror::run` reads the two env vars, calls `rest_client::get_pair_info(pair)`, then runs two tasks. The reader sends raw `level3` text frames. The updater owns `OrderBookMirror` and the `Screen`. Whichever task returns first, `run` aborts and awaits the other, then returns the finished task's result.
+1. `cmds::dashboard::run` reads the two env vars, calls `rest_client::get_pair_info(pair)`, then runs two tasks. The reader sends raw `level3` text frames. The updater owns `OrderBookMirror` and the `Screen`. Whichever task returns first, `run` aborts and awaits the other, then returns the finished task's result.
 2. Pair info: GET `https://api.kraken.com/0/public/AssetPairs?pair=PAIR`. It takes the first entry in the result map. `pair_decimals` becomes the price scale and `lot_decimals` the quantity scale. `PairInfo` calls them `quote_precision` and `base_precision`. A Kraken error array or an empty result is an error. The scales are not hardcoded.
 3. Token: POST `https://api.kraken.com/0/private/GetWebSocketsToken`. Body is the hand-built form `nonce={nonce}`. `sign::get_signature` is SHA256 of `nonce` concatenated with that body, then HMAC-SHA512 of `url_path || sha256` using the base64-decoded API secret. Headers are `API-Key` and `API-Sign` (base64 HMAC). `TokenResult` stores `token`. The `expires` field is commented out and is not deserialized.
 4. Connect to `wss://ws-l3.kraken.com/v2` (native-tls via tokio-tungstenite). Tungstenite answers WebSocket ping itself. The read loop ignores non-text messages.
