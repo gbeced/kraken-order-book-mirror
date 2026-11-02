@@ -25,8 +25,6 @@ const GROUPS: [u32; 4] = [1, 5, 10, 50];
 const FLASH_FOR: Duration = Duration::from_millis(400);
 const LAG_WINDOW: Duration = Duration::from_secs(10);
 const OFI_WINDOW: Duration = Duration::from_secs(60);
-const HISTORY_SAMPLE: Duration = Duration::from_secs(1);
-const HISTORY_LEN: usize = 60;
 
 pub(crate) enum UiEvent {
     Quit,
@@ -57,14 +55,6 @@ pub struct Screen {
     frozen: Option<(DateTime<Utc>, Instant)>,
 }
 
-#[derive(Clone, Copy)]
-struct Sample {
-    mid: f64,
-    spread_ticks: f64,
-    imbalance: f64,
-    micro_offset_ticks: f64,
-}
-
 /// Direction of a ladder level's last size change.
 #[derive(Clone, Copy)]
 struct Flash {
@@ -83,8 +73,6 @@ struct BookCard {
     ask_ladder: Vec<Level>,
     bid_ladder: Vec<Level>,
     flashes: HashMap<Decimal, Flash>,
-    history: VecDeque<Sample>,
-    last_sample: Option<Instant>,
     lags: VecDeque<(Instant, i64)>,
     ofi: VecDeque<(Instant, Decimal)>,
     prev_touch: Option<Touch>,
@@ -103,8 +91,6 @@ impl BookCard {
             ask_ladder: Vec::new(),
             bid_ladder: Vec::new(),
             flashes: HashMap::new(),
-            history: VecDeque::with_capacity(HISTORY_LEN + 1),
-            last_sample: None,
             lags: VecDeque::new(),
             ofi: VecDeque::new(),
             prev_touch: None,
@@ -155,22 +141,6 @@ impl BookCard {
             self.ofi.pop_front();
         }
         self.prev_touch = Some(analysis.touch);
-
-        if self
-            .last_sample
-            .is_none_or(|at| now.duration_since(at) >= HISTORY_SAMPLE)
-        {
-            self.last_sample = Some(now);
-            self.history.push_back(Sample {
-                mid: metrics::to_f64(analysis.panel.mid),
-                spread_ticks: metrics::to_f64(analysis.spread_ticks),
-                imbalance: metrics::to_f64(analysis.l10_imbalance),
-                micro_offset_ticks: metrics::to_f64(analysis.micro_offset_ticks),
-            });
-            while self.history.len() > HISTORY_LEN {
-                self.history.pop_front();
-            }
-        }
 
         self.timestamp = Some(timestamp);
         let tick = analysis.tick;

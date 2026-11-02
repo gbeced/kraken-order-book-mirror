@@ -1,4 +1,4 @@
-//! Dashboard rendering: header, ladder, imbalance, depth, impact, L3 stats, history.
+//! Dashboard rendering: header, ladder, imbalance, depth, impact, L3 stats.
 
 use super::compact;
 use super::format::{
@@ -9,7 +9,7 @@ use super::metrics::{self, Analysis, BigOrder, Level};
 use super::style::{
     ask_bar, bid_bar, bright, cyan, flash_down, flash_up, gray, green, red, yellow,
 };
-use super::{BookCard, FLASH_FOR, Sample};
+use super::{BookCard, FLASH_FOR};
 use chrono::{DateTime, Utc};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -24,7 +24,6 @@ const FULL_HEIGHT: u16 = 32;
 const MEDIUM_WIDTH: u16 = 80;
 const MEDIUM_HEIGHT: u16 = 20;
 const STALE_MS: i64 = 2_000;
-const SPARK_CHARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
 pub(super) struct Ctx {
     pub now_utc: DateTime<Utc>,
@@ -93,14 +92,12 @@ fn dashboard(
     let base = base_asset(&card.symbol);
 
     if mode == Mode::Full {
-        let [main, history] =
-            Layout::vertical([Constraint::Min(0), Constraint::Length(6)]).areas(body_area);
         let [ladder, middle, right] = Layout::horizontal([
             Constraint::Percentage(40),
             Constraint::Percentage(30),
             Constraint::Percentage(30),
         ])
-        .areas(main);
+        .areas(body_area);
         render_ladder(frame, ladder, card, analysis, ctx);
         let [imbalance, bands] =
             Layout::vertical([Constraint::Length(7), Constraint::Min(0)]).areas(middle);
@@ -110,7 +107,6 @@ fn dashboard(
             Layout::vertical([Constraint::Length(6), Constraint::Min(0)]).areas(right);
         render_impact(frame, impact, analysis, quote);
         render_l3(frame, l3, analysis, base);
-        render_history(frame, history, card, analysis);
     } else {
         let [ladder, right] =
             Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
@@ -563,70 +559,6 @@ fn big_line(name: &str, big: Option<&BigOrder>, dp: u32, side: Style) -> Line<'s
     Line::from(spans)
 }
 
-// ----- history ------------------------------------------------------------------------
-
-fn render_history(frame: &mut Frame, area: Rect, card: &BookCard, a: &Analysis) {
-    let block = panel("LAST 60s");
-    let inner = block.inner(area);
-    let samples: Vec<&Sample> = card.history.iter().collect();
-    let series: [(&str, Vec<f64>, String); 4] = [
-        (
-            "mid",
-            samples.iter().map(|s| s.mid).collect(),
-            range_text(&samples, |s| s.mid, a.price_dp),
-        ),
-        (
-            "spread",
-            samples.iter().map(|s| s.spread_ticks).collect(),
-            format!("{} tick", a.spread_ticks.round_dp(1).normalize()),
-        ),
-        (
-            "imb L10",
-            samples.iter().map(|s| s.imbalance).collect(),
-            format_signed(a.l10_imbalance, 2),
-        ),
-        (
-            "micro-mid",
-            samples.iter().map(|s| s.micro_offset_ticks).collect(),
-            format!("{} tick", format_signed(a.micro_offset_ticks, 2)),
-        ),
-    ];
-    let label_w = 10;
-    let text_w = 26;
-    let spark_w = usize::from(inner.width).saturating_sub(label_w + text_w + 2);
-    let lines: Vec<Line> = series
-        .iter()
-        .map(|(name, values, text)| {
-            let start = values.len().saturating_sub(spark_w);
-            let spark: String = metrics::scale_series(&values[start..])
-                .into_iter()
-                .map(|level| SPARK_CHARS[usize::from(level).min(7)])
-                .collect();
-            Line::from(vec![
-                label(&pad_right(name, label_w)),
-                Span::styled(pad_right(&spark, spark_w), cyan()),
-                Span::raw("  "),
-                value(text.clone()),
-            ])
-        })
-        .collect();
-    frame.render_widget(Paragraph::new(lines).block(block), area);
-}
-
-fn range_text(samples: &[&Sample], pick: impl Fn(&Sample) -> f64, dp: u32) -> String {
-    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
-    for sample in samples {
-        let v = pick(sample);
-        lo = lo.min(v);
-        hi = hi.max(v);
-    }
-    if !lo.is_finite() {
-        return "—".to_string();
-    }
-    let dp = dp as usize;
-    format!("{lo:.dp$} – {hi:.dp$}")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -711,7 +643,6 @@ mod tests {
             "DEPTH",
             "IMPACT",
             "L3 ORDERS",
-            "LAST 60s",
             "MID",
             "MICRO",
             "OFI",
@@ -721,10 +652,9 @@ mod tests {
     }
 
     #[test]
-    fn medium_dashboard_drops_history() {
+    fn medium_dashboard_renders() {
         let out = render_to_string(100, 30);
         assert!(out.contains("LADDER") && out.contains("IMBALANCE"));
-        assert!(!out.contains("LAST 60s"));
     }
 
     #[test]

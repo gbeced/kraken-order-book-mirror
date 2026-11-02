@@ -210,7 +210,6 @@ pub(super) struct Analysis {
     pub avg_bid_order: Decimal,
     pub avg_ask_order: Decimal,
     pub imbalances: [ImbalanceRow; 5],
-    pub l10_imbalance: Decimal,
     pub bands: Vec<BandRow>,
     pub impact: Vec<ImpactRow>,
     pub big_bid: Option<BigOrder>,
@@ -309,7 +308,6 @@ impl Analysis {
             avg_bid_order,
             avg_ask_order,
             imbalances,
-            l10_imbalance: imbalance(l10.0, l10.1),
             bands,
             impact,
             big_bid: biggest_order(bids, mid, avg_bid_order),
@@ -409,23 +407,6 @@ pub(super) fn percentile(sorted: &[i64], pct: u32) -> Option<i64> {
     }
     let rank = (sorted.len() * pct as usize).div_ceil(100).max(1);
     Some(sorted[rank.min(sorted.len()) - 1])
-}
-
-/// Map a series to `0..=7` block heights using its own min and max.
-pub(super) fn scale_series(values: &[f64]) -> Vec<u8> {
-    let min = values.iter().copied().fold(f64::INFINITY, f64::min);
-    let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    let range = max - min;
-    values
-        .iter()
-        .map(|value| {
-            if range <= f64::EPSILON {
-                0
-            } else {
-                (((value - min) / range) * 7.0).round() as u8
-            }
-        })
-        .collect()
 }
 
 pub(super) fn to_f64(value: Decimal) -> f64 {
@@ -600,12 +581,6 @@ mod tests {
         assert_eq!(percentile(&values, 50), Some(50));
         assert_eq!(percentile(&values, 99), Some(100));
         assert_eq!(percentile(&[], 50), None);
-    }
-
-    #[test]
-    fn scale_series_spans_zero_to_seven() {
-        assert_eq!(scale_series(&[1.0, 2.0, 3.0]), vec![0, 4, 7]);
-        assert_eq!(scale_series(&[5.0, 5.0]), vec![0, 0]);
     }
 
     #[test]

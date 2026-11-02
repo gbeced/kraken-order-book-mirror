@@ -15,7 +15,7 @@ cargo run --release -- mirror BTC/USD [DEPTH]
 1. A reader task receives Kraken `level3` frames (full order-by-order book: one entry per resting order).
 2. An updater task applies each frame to the local book and verifies Kraken's CRC32 checksum. If anything fails the program exits with the error instead of showing a wrong book.
 3. The screen is repainted **at most every 100 ms** (10 Hz), however fast frames arrive. Frames that are skipped still count towards `upd/s`.
-4. On each paint the UI recomputes all metrics from the full book. It also records history (60 s sparklines, lag samples, order flow imbalance).
+4. On each paint the UI recomputes all metrics from the full book. It also records lag samples and order flow imbalance.
 
 Because Kraken sends individual orders, the UI can show things an L2 feed can't: how many orders sit at a price, and how big the largest single order is.
 
@@ -28,7 +28,7 @@ The layout depends on the terminal size.
 | Terminal size | View |
 | --- | --- |
 | 120 columns × 32 rows or larger | **Full**: all panels |
-| 80 × 20 or larger | **Medium**: header, ladder, imbalance, depth, and impact if there is room. No L3 panel or history |
+| 80 × 20 or larger | **Medium**: header, ladder, imbalance, depth, and impact if there is room. No L3 panel |
 | Smaller in either dimension | **Compact**: a six-row card per symbol, stacked |
 
 Resizing the window repaints immediately.
@@ -52,9 +52,7 @@ Resizing the window repaints immediately.
 │                      ├──────────────────┤                        │
 │                      │ DEPTH            ├────────────────────────┤
 │                      │                  │ L3 ORDERS              │
-├──────────────────────┴──────────────────┴────────────────────────┤
-│ LAST 60s  sparklines                                             │
-└──────────────────────────────────────────────────────────────────┘
+└──────────────────────┴──────────────────┴────────────────────────┘
  q quit  g group 1x  p pause
 ```
 
@@ -146,19 +144,6 @@ This ignores fees and any liquidity that appears or disappears while you trade.
 
 A large distance from mid usually means a passive wall far from the touch, not an imminent move.
 
-### Last 60s
-
-One sparkline each, sampled once per second for up to 60 s:
-
-| Series | Value on the right |
-| --- | --- |
-| `mid` | Low – high range of mid over the window |
-| `spread` | Current spread in ticks |
-| `imb L10` | Current L10 imbalance |
-| `micro-mid` | Current microprice offset in ticks |
-
-Each sparkline is **auto-scaled to its own min and max**, so even tiny moves fill the full height. A flat line at the bottom means no variation, not zero. Read the numbers on the right for the actual values.
-
 ## Compact view
 
 Below either size threshold, each symbol gets a six-row card, stacked from the top. It shows the most important figures from the dashboard, computed the same way, so the numbers don't change when you resize.
@@ -181,7 +166,7 @@ Below either size threshold, each symbol gets a six-row card, stacked from the t
 | **Row 3** | Imbalance at L1, L10 and ±1.0% |
 | **Row 4** | Bid/ask quantity and bid/ask ratio within ±10 and ±100 bps of mid |
 
-The ladder, impact, L3 orders and sparklines appear only in the larger views.
+The ladder, impact and L3 orders appear only in the larger views.
 
 On a narrow terminal, a field that doesn't fit is dropped whole, because a clipped number could read as a different number. Fields go from the right of each row. If both bid and ask can't fit with their sizes, the sizes go and both prices stay. On a short terminal the card loses rows from the bottom.
 
