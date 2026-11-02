@@ -84,25 +84,3 @@ pub async fn get_pair_info(pair: &str) -> Result<PairInfo, Box<dyn Error>> {
         quote_precision: asset_pair.pair_decimals,
     })
 }
-
-// pub async fn get_pair_info(pair: &str) -> Result<PairInfo, Box<dyn Error>> {
-//     let ret = match pair {
-//         "BTC/USD" => PairInfo {
-//             base_precision: 8,
-//             quote_precision: 1,
-//         },
-//         "ETH/USD" => PairInfo {
-//             base_precision: 8,
-//             quote_precision: 2,
-//         },
-//         _ => {
-//             assert!(false);
-//             PairInfo {
-//                 base_precision: 8,
-//                 quote_precision: 1,
-//             }
-//         }
-//     };
-
-//     Ok(ret)
-// }
