@@ -36,6 +36,7 @@ async fn obook_updater(
                 match event {
                     UiEvent::Quit => break,
                     UiEvent::Resize => screen.redraw()?,
+                    UiEvent::Key(key) => screen.on_key(key)?,
                 }
             }
             incoming = receiver.recv() => {

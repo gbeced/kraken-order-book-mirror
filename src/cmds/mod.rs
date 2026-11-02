@@ -1,3 +1,3 @@
 pub mod bench;
-pub mod mirror;
+pub mod dashboard;
 pub mod dump;

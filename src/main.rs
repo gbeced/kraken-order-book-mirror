@@ -15,8 +15,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Mirror the order book for a pair
-    Mirror {
+    /// Show the live order book dashboard for a pair
+    Dashboard {
         /// Trading pair, e.g. BTC/USD
         pair: String,
         /// Book depth
@@ -47,7 +47,7 @@ pub fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Mirror { pair, depth } => cmds::mirror::run(pair, depth),
+        Command::Dashboard { pair, depth } => cmds::dashboard::run(pair, depth),
         Command::Dump { pair, depth } => cmds::dump::run(pair, depth),
         Command::Bench { file, pair, depth } => cmds::bench::run(file, pair, depth),
     }
