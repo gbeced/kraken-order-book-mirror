@@ -1,6 +1,6 @@
 use super::units;
 use super::{order_book, wire};
-use chrono::{DateTime, Utc};
+use crate::common::ts::Ts;
 use std::cell::RefCell;
 use std::error::Error;
 
@@ -8,7 +8,7 @@ struct OrderEvent {
     order_id: String,
     limit_price: u64,
     order_qty: u64,
-    timestamp: DateTime<Utc>,
+    timestamp: Ts,
     event: wire::EventType,
 }
 
@@ -338,7 +338,7 @@ mod tests {
             order_id: Uuid::new_v4().simple().to_string(),
             limit_price: to_units(limit_price, price_scale).expect("price units"),
             order_qty: to_units(Decimal::from(1), qty_scale).expect("qty units"),
-            timestamp: Utc::now(),
+            timestamp: Ts::try_from(chrono::Utc::now()).unwrap(),
         }
     }
 
@@ -352,7 +352,7 @@ mod tests {
             order_id: Uuid::new_v4().simple().to_string(),
             limit_price: to_units(limit_price, price_scale).expect("price units"),
             order_qty: to_units(Decimal::from(1), qty_scale).expect("qty units"),
-            timestamp: Utc::now(),
+            timestamp: Ts::try_from(chrono::Utc::now()).unwrap(),
             event,
         }
     }
@@ -372,15 +372,9 @@ mod tests {
             .into_iter()
             .map(|i| build_order(first_ask + Decimal::from(i), price_scale, qty_scale))
             .collect();
-        let snapshot_ts = "2026-09-15T21:28:25.745828658Z"
-            .parse::<DateTime<Utc>>()
-            .unwrap();
-        let first_update_ts = "2026-09-15T21:28:25.964171032Z"
-            .parse::<DateTime<Utc>>()
-            .unwrap();
-        let second_update_ts = "2026-09-15T21:28:25.965086460Z"
-            .parse::<DateTime<Utc>>()
-            .unwrap();
+        let snapshot_ts = Ts::try_from("2026-09-15T21:28:25.745828658Z").unwrap();
+        let first_update_ts = Ts::try_from("2026-09-15T21:28:25.964171032Z").unwrap();
+        let second_update_ts = Ts::try_from("2026-09-15T21:28:25.965086460Z").unwrap();
         let snapshot = Snapshot {
             checksum: 1913449638,
             timestamp: snapshot_ts,

@@ -10,7 +10,7 @@ use super::style::{
     ask_bar, bid_bar, bright, cyan, flash_down, flash_up, gray, green, red, yellow,
 };
 use super::{BookCard, FLASH_FOR};
-use chrono::{DateTime, Utc};
+use crate::common::ts::Ts;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
@@ -26,7 +26,7 @@ const MEDIUM_HEIGHT: u16 = 20;
 const STALE_MS: i64 = 2_000;
 
 pub(super) struct Ctx {
-    pub now_utc: DateTime<Utc>,
+    pub now_utc: Ts,
     pub now: Instant,
     pub group: u32,
     pub paused: bool,
@@ -202,11 +202,11 @@ fn render_header(
     area: Rect,
     card: &BookCard,
     a: &Analysis,
-    timestamp: DateTime<Utc>,
+    timestamp: Ts,
     ctx: &Ctx,
 ) {
     let dp = a.price_dp;
-    let age = age_ms(ctx.now_utc - timestamp);
+    let age = age_ms(ctx.now_utc, timestamp);
 
     let mut first = status_spans(a, age, ctx.paused);
     first.push(Span::raw("   "));
@@ -607,8 +607,8 @@ mod tests {
         };
         let card = screen.card_mut("BTC/USD");
         let analysis = Analysis::from_book(asks, bids).unwrap();
-        let now = Utc::now();
-        let timestamp = now - chrono::Duration::milliseconds(age_ms);
+        let now = Ts::now().unwrap();
+        let timestamp = Ts(now.0 - age_ms * 1_000_000);
         card.ingest(asks, bids, analysis, timestamp, 1, Instant::now(), now);
         let ctx = Ctx {
             now_utc: now,

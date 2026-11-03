@@ -1,8 +1,9 @@
-use chrono::Duration as ChronoDuration;
+use crate::common::ts::Ts;
 use rust_decimal::Decimal;
 
-pub(super) fn age_ms(age: ChronoDuration) -> i64 {
-    age.num_milliseconds().max(0)
+/// Whole milliseconds from `then` to `now`, clamped at zero.
+pub(super) fn age_ms(now: Ts, then: Ts) -> i64 {
+    (now.0.saturating_sub(then.0) / 1_000_000).max(0)
 }
 
 pub(super) fn format_age(ms: i64) -> String {
@@ -127,5 +128,13 @@ mod tests {
         assert_eq!(format_age(12), "12ms");
         assert_eq!(format_age(1_250), "1.2s");
         assert_eq!(format_age(120_000), "2m");
+    }
+
+    #[test]
+    fn age_ms_truncates_and_clamps() {
+        assert_eq!(age_ms(Ts(5_000_000), Ts(2_000_000)), 3);
+        assert_eq!(age_ms(Ts(2_999_999), Ts(0)), 2);
+        assert_eq!(age_ms(Ts(0), Ts(1_000_000)), 0);
+        assert_eq!(age_ms(Ts(i64::MAX), Ts(i64::MIN)), i64::MAX / 1_000_000);
     }
 }
