@@ -4,7 +4,7 @@ mod metrics;
 mod render;
 mod style;
 
-use chrono::{DateTime, Utc};
+use crate::common::ts::Ts;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use format::age_ms;
 use metrics::{Analysis, Level, Touch};
@@ -52,7 +52,7 @@ pub struct Screen {
     input: Option<JoinHandle<()>>,
     group: usize,
     focus: usize,
-    frozen: Option<(DateTime<Utc>, Instant)>,
+    frozen: Option<(Ts, Instant)>,
 }
 
 /// Direction of a ladder level's last size change.
@@ -69,7 +69,7 @@ struct BookCard {
     asks: Vec<(Decimal, Decimal)>,
     bids: Vec<(Decimal, Decimal)>,
     analysis: Option<Analysis>,
-    timestamp: Option<DateTime<Utc>>,
+    timestamp: Option<Ts>,
     ask_ladder: Vec<Level>,
     bid_ladder: Vec<Level>,
     flashes: HashMap<Decimal, Flash>,
@@ -108,17 +108,17 @@ impl BookCard {
         asks: &[(Decimal, Decimal)],
         bids: &[(Decimal, Decimal)],
         analysis: Analysis,
-        timestamp: DateTime<Utc>,
+        timestamp: Ts,
         group: u32,
         now: Instant,
-        now_utc: DateTime<Utc>,
+        now_utc: Ts,
     ) {
         self.asks.clear();
         self.asks.extend_from_slice(asks);
         self.bids.clear();
         self.bids.extend_from_slice(bids);
 
-        self.lags.push_back((now, age_ms(now_utc - timestamp)));
+        self.lags.push_back((now, age_ms(now_utc, timestamp)));
         while self
             .lags
             .front()
@@ -256,7 +256,7 @@ impl Screen {
         symbol: &str,
         asks: &[(Decimal, Decimal)],
         bids: &[(Decimal, Decimal)],
-        timestamp: DateTime<Utc>,
+        timestamp: Ts,
     ) -> Result<(), String> {
         if self.frozen.is_some() {
             return Ok(());
@@ -265,6 +265,7 @@ impl Screen {
             return Ok(());
         };
         let group = GROUPS[self.group];
+        let now_utc = Ts::now().map_err(str::to_string)?;
         self.card_mut(symbol).ingest(
             asks,
             bids,
@@ -272,7 +273,7 @@ impl Screen {
             timestamp,
             group,
             Instant::now(),
-            Utc::now(),
+            now_utc,
         );
         self.paint()?;
         self.last_paint = Some(Instant::now());
@@ -298,7 +299,7 @@ impl Screen {
             UiKey::Pause => {
                 self.frozen = match self.frozen {
                     Some(_) => None,
-                    None => Some((Utc::now(), Instant::now())),
+                    None => Some((Ts::now().map_err(str::to_string)?, Instant::now())),
                 };
             }
             UiKey::NextSymbol => {
@@ -326,7 +327,10 @@ impl Screen {
     }
 
     fn paint(&mut self) -> Result<(), String> {
-        let (now_utc, now) = self.frozen.unwrap_or_else(|| (Utc::now(), Instant::now()));
+        let (now_utc, now) = match self.frozen {
+            Some(frozen) => frozen,
+            None => (Ts::now().map_err(str::to_string)?, Instant::now()),
+        };
         let ctx = render::Ctx {
             now_utc,
             now,
@@ -452,7 +456,7 @@ mod tests {
 
     fn ingest(card: &mut BookCard, asks: &[(Decimal, Decimal)], bids: &[(Decimal, Decimal)]) {
         let analysis = Analysis::from_book(asks, bids).unwrap();
-        let now_utc = Utc::now();
+        let now_utc = Ts::now().unwrap();
         card.ingest(asks, bids, analysis, now_utc, 1, Instant::now(), now_utc);
     }
 

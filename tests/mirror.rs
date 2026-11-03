@@ -84,7 +84,7 @@ mod tests {
         // Check that we're actually on the last message
         let obook = mirror.get_order_book().expect("No order book");
         assert_eq!(
-            obook.timestamp.to_string(),
+            chrono::DateTime::<chrono::Utc>::from(obook.timestamp).to_string(),
             "2026-10-07 16:31:44.979328334 UTC"
         );
     }

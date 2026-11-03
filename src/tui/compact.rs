@@ -68,7 +68,7 @@ fn render_card(frame: &mut Frame, area: Rect, card: &BookCard, ctx: &Ctx) {
     let (Some(a), Some(timestamp)) = (card.analysis.as_ref(), card.timestamp) else {
         return;
     };
-    let age = age_ms(ctx.now_utc - timestamp);
+    let age = age_ms(ctx.now_utc, timestamp);
 
     let mut title = vec![Span::styled(
         format!(" {} ", card.symbol),

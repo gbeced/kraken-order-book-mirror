@@ -1,5 +1,5 @@
 use super::units;
-use chrono::{DateTime, Utc};
+use crate::common::ts::Ts;
 use rust_decimal::Decimal;
 use std::ops::Index;
 
@@ -7,7 +7,7 @@ pub struct Order {
     pub order_id: String,
     pub limit_price: u64,
     pub order_qty: u64,
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: Ts,
 }
 
 // Orders are sorted by limit_price (asc/desc) + timestamp(asc).
@@ -19,7 +19,7 @@ pub struct Orders {
 pub struct OrderBook {
     pub asks: Orders,
     pub bids: Orders,
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: Ts,
     price_scale: u8,
     qty_scale: u8,
 }
@@ -156,7 +156,7 @@ impl OrderBook {
     pub fn new(
         asks: Orders,
         bids: Orders,
-        timestamp: DateTime<Utc>,
+        timestamp: Ts,
         price_scale: u8,
         qty_scale: u8,
     ) -> OrderBook {
@@ -194,7 +194,7 @@ mod tests {
             order_id: Uuid::new_v4().simple().to_string(),
             limit_price: to_units(limit_price, price_scale).expect("price units"),
             order_qty: to_units(Decimal::from(1), qty_scale).expect("qty units"),
-            timestamp: Utc::now(),
+            timestamp: Ts::try_from(chrono::Utc::now()).unwrap(),
         }
     }
 
