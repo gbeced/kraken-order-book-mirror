@@ -265,7 +265,7 @@ impl Screen {
             return Ok(());
         };
         let group = GROUPS[self.group];
-        let now_utc = Ts::now().map_err(str::to_string)?;
+        let now_utc = Ts::now();
         self.card_mut(symbol).ingest(
             asks,
             bids,
@@ -299,7 +299,7 @@ impl Screen {
             UiKey::Pause => {
                 self.frozen = match self.frozen {
                     Some(_) => None,
-                    None => Some((Ts::now().map_err(str::to_string)?, Instant::now())),
+                    None => Some((Ts::now(), Instant::now())),
                 };
             }
             UiKey::NextSymbol => {
@@ -329,7 +329,7 @@ impl Screen {
     fn paint(&mut self) -> Result<(), String> {
         let (now_utc, now) = match self.frozen {
             Some(frozen) => frozen,
-            None => (Ts::now().map_err(str::to_string)?, Instant::now()),
+            None => (Ts::now(), Instant::now()),
         };
         let ctx = render::Ctx {
             now_utc,
@@ -456,7 +456,7 @@ mod tests {
 
     fn ingest(card: &mut BookCard, asks: &[(Decimal, Decimal)], bids: &[(Decimal, Decimal)]) {
         let analysis = Analysis::from_book(asks, bids).unwrap();
-        let now_utc = Ts::now().unwrap();
+        let now_utc = Ts::now();
         card.ingest(asks, bids, analysis, now_utc, 1, Instant::now(), now_utc);
     }
 

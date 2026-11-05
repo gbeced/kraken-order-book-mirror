@@ -6,13 +6,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct Ts(pub i64);
 
 impl Ts {
-    /// The current system time. Errors with `timestamp out of range` outside about 1677–2262.
-    pub fn now() -> Result<Ts, &'static str> {
-        let nanos = match SystemTime::now().duration_since(UNIX_EPOCH) {
-            Ok(d) => i64::try_from(d.as_nanos()).ok(),
-            Err(e) => i64::try_from(e.duration().as_nanos()).ok().map(|n| -n),
-        };
-        nanos.map(Ts).ok_or("timestamp out of range")
+    // The current system time. Panics if the clock is out of range.
+    pub fn now() -> Ts {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock is out of range");
+
+        i64::try_from(now.as_nanos())
+            .map(Ts)
+            .expect("clock is out of range")
     }
 }
 
@@ -113,7 +115,7 @@ mod tests {
     #[test]
     fn now_is_close_to_chrono_now() {
         let before = Ts::try_from(Utc::now()).unwrap();
-        let now = Ts::now().unwrap();
+        let now = Ts::now();
         let after = Ts::try_from(Utc::now()).unwrap();
         assert!(before <= now && now <= after);
     }
