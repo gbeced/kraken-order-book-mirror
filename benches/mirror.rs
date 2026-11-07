@@ -2,24 +2,41 @@ use std::fmt::Write;
 
 use rust_order_book_mirror::kraken::level3::mirror::OrderBookMirror;
 
-const DEPTH: usize = 100;
+const DEPTH: usize = 1000;
 const PRICE_SCALE: u8 = 1;
 const QTY_SCALE: u8 = 8;
-// Seconds between the first order of adjacent levels. An added order uses the
-// next slot, so it sorts after the orders already at that price.
-const LEVEL_STRIDE: usize = 4;
-const ORDERS_SINGLE: usize = 1;
-const ORDERS_MULTI: usize = 4;
+// Orders per level, cycled over the book. Shaped after
+// `tests/data/btc_usd_stream.log`: median 2, tail around 10, and size-1 levels
+// that a single delete clears.
+const LEVEL_SIZES: [usize; 10] = [1, 2, 1, 3, 2, 1, 6, 2, 1, 10];
+// Seconds between the first order of adjacent levels. Larger than any level
+// size, so an added order takes the next slot and sorts after the others.
+const LEVEL_STRIDE: usize = 16;
+// Ticks between adjacent levels. The free tick between two levels lets an add
+// open a new price level inside the book.
+const LEVEL_TICKS: usize = 2;
+const MIDDLE_LEVEL: usize = 50;
+
+const STREAM_LOG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/btc_usd_stream.log");
+// The log was captured with depth 10.
+const STREAM_DEPTH: usize = 10;
 
 fn main() {
     divan::main();
 }
 
+// Frame patterns seen in the captured stream (4891 updates):
+// - single add, new level or joining one: ~50%
+// - delete that clears a level, then adds that backfill the deepest level: ~27%
+// - single delete that leaves the level non-empty (cancel): ~22%
+// - single modify at the touch (partial fill): ~1.4%
 #[derive(Clone, Copy)]
-enum Event {
-    Add,
-    Modify,
-    Delete,
+enum Pattern {
+    AddNewLevel,
+    AddJoin,
+    Cancel,
+    Fill,
+    ClearBackfill(usize),
 }
 
 #[derive(Clone, Copy)]
@@ -30,64 +47,49 @@ enum Place {
 }
 
 #[derive(Clone, Copy)]
-enum Shape {
-    Single,
-    Multi,
-}
-
-#[derive(Clone, Copy)]
 struct Case {
-    event: Event,
+    pattern: Pattern,
     place: Place,
-    shape: Shape,
 }
 
-const fn case(event: Event, place: Place, shape: Shape) -> Case {
-    Case {
-        event,
-        place,
-        shape,
-    }
+const fn case(pattern: Pattern, place: Place) -> Case {
+    Case { pattern, place }
 }
 
-const CASES: [Case; 18] = [
-    case(Event::Add, Place::Begin, Shape::Single),
-    case(Event::Add, Place::Middle, Shape::Single),
-    case(Event::Add, Place::End, Shape::Single),
-    case(Event::Add, Place::Begin, Shape::Multi),
-    case(Event::Add, Place::Middle, Shape::Multi),
-    case(Event::Add, Place::End, Shape::Multi),
-    case(Event::Modify, Place::Begin, Shape::Single),
-    case(Event::Modify, Place::Middle, Shape::Single),
-    case(Event::Modify, Place::End, Shape::Single),
-    case(Event::Modify, Place::Begin, Shape::Multi),
-    case(Event::Modify, Place::Middle, Shape::Multi),
-    case(Event::Modify, Place::End, Shape::Multi),
-    case(Event::Delete, Place::Begin, Shape::Single),
-    case(Event::Delete, Place::Middle, Shape::Single),
-    case(Event::Delete, Place::End, Shape::Single),
-    case(Event::Delete, Place::Begin, Shape::Multi),
-    case(Event::Delete, Place::Middle, Shape::Multi),
-    case(Event::Delete, Place::End, Shape::Multi),
+const CASES: [Case; 16] = [
+    case(Pattern::AddNewLevel, Place::Begin),
+    case(Pattern::AddNewLevel, Place::Middle),
+    case(Pattern::AddNewLevel, Place::End),
+    case(Pattern::AddJoin, Place::Begin),
+    case(Pattern::AddJoin, Place::Middle),
+    case(Pattern::AddJoin, Place::End),
+    case(Pattern::Cancel, Place::Begin),
+    case(Pattern::Cancel, Place::Middle),
+    case(Pattern::Cancel, Place::End),
+    case(Pattern::Fill, Place::Begin),
+    case(Pattern::ClearBackfill(1), Place::Begin),
+    case(Pattern::ClearBackfill(1), Place::Middle),
+    case(Pattern::ClearBackfill(1), Place::End),
+    case(Pattern::ClearBackfill(4), Place::Begin),
+    case(Pattern::ClearBackfill(4), Place::Middle),
+    case(Pattern::ClearBackfill(4), Place::End),
 ];
 
 impl std::fmt::Display for Case {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let event = match self.event {
-            Event::Add => "add",
-            Event::Modify => "modify",
-            Event::Delete => "delete",
-        };
+        match self.pattern {
+            Pattern::AddNewLevel => f.write_str("add_new_level")?,
+            Pattern::AddJoin => f.write_str("add_join")?,
+            Pattern::Cancel => f.write_str("cancel")?,
+            Pattern::Fill => f.write_str("fill")?,
+            Pattern::ClearBackfill(adds) => write!(f, "clear_backfill_{adds}")?,
+        }
         let place = match self.place {
             Place::Begin => "begin",
             Place::Middle => "middle",
             Place::End => "end",
         };
-        let shape = match self.shape {
-            Shape::Single => "single",
-            Shape::Multi => "multi",
-        };
-        write!(f, "{event}/{place}/{shape}")
+        write!(f, "/{place}")
     }
 }
 
@@ -119,13 +121,37 @@ fn on_update(bencher: divan::Bencher, case: Case) {
         });
 }
 
+// Every update frame of the captured BTC/USD stream, in order, on a depth-10
+// book. The snapshot apply is outside the timer.
+#[divan::bench]
+fn replay_stream(bencher: divan::Bencher) {
+    let log = std::fs::read_to_string(STREAM_LOG).expect("stream log");
+    let mut lines = log.lines();
+    let snapshot = lines.next().expect("snapshot line");
+    let updates: Vec<&str> = lines.collect();
+    bencher
+        .with_inputs(|| {
+            let mut mirror = OrderBookMirror::new(STREAM_DEPTH, PRICE_SCALE, QTY_SCALE);
+            mirror.on_message(snapshot).expect("snapshot");
+            mirror
+        })
+        .bench_local_refs(|mirror| {
+            for update in &updates {
+                mirror
+                    .on_message(divan::black_box(update))
+                    .unwrap_or_else(|err| panic!("stream update: {err}"));
+            }
+            divan::black_box(mirror.get_order_book().expect("book").asks.len())
+        });
+}
+
 struct Prepared {
     snapshot: String,
     update: String,
 }
 
 fn prepare(case: Case) -> Prepared {
-    let snapshot = snapshot_frame(case.shape);
+    let snapshot = snapshot_frame();
     let update = stamp_checksum(&snapshot, update_frame(case));
     let mut mirror = OrderBookMirror::new(DEPTH, PRICE_SCALE, QTY_SCALE);
     mirror
@@ -134,6 +160,13 @@ fn prepare(case: Case) -> Prepared {
     mirror
         .on_message(&update)
         .unwrap_or_else(|err| panic!("{case} stamped update: {err}"));
+    let asks = &mirror.get_order_book().expect("book").asks;
+    let levels = asks
+        .iter()
+        .map(|order| order.limit_price)
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    assert_eq!(levels, DEPTH, "{case}: ask levels after update");
     Prepared { snapshot, update }
 }
 
@@ -159,61 +192,139 @@ fn stamp_checksum(snapshot: &str, mut update: String) -> String {
     update
 }
 
-fn snapshot_frame(shape: Shape) -> String {
-    let per_level = orders_per_level(shape);
+fn snapshot_frame() -> String {
     let mut out = String::new();
     // Bids high to low, asks low to high. Slots at a price are oldest first.
     out.push_str(
         r#"{"channel":"level3","type":"snapshot","data":[{"checksum":0,"symbol":"BTC/USD","timestamp":"2026-01-01T00:00:00Z","bids":"#,
     );
-    push_side(&mut out, 'b', per_level, false);
+    push_side(&mut out, 'b', bid_price);
     out.push_str(r#","asks":"#);
-    push_side(&mut out, 'a', per_level, true);
+    push_side(&mut out, 'a', ask_price);
     out.push_str("}]}");
     out
 }
 
+// One ask event as written on the wire.
+struct Event {
+    kind: &'static str,
+    order_id: String,
+    price: String,
+    qty: &'static str,
+    ts_secs: usize,
+}
+
+impl Event {
+    // An order that the snapshot holds at `level`, `slot`.
+    fn existing(kind: &'static str, level: usize, slot: usize, qty: &'static str) -> Event {
+        Event {
+            kind,
+            order_id: order_id('a', level, slot),
+            price: ask_price(level),
+            qty,
+            ts_secs: slot_secs(level, slot),
+        }
+    }
+}
+
 fn update_frame(case: Case) -> String {
-    let level = level_index(case.place);
-    let per_level = orders_per_level(case.shape);
-    // Last order at the level, so modify and delete scan the whole price.
-    // Modify keeps that timestamp and only changes quantity, which writes in place.
-    // Add uses a new id and a later timestamp, so it appends at this price.
-    let (event, slot, qty) = match case.event {
-        Event::Add => ("add", per_level, "1.00000000"),
-        Event::Modify => ("modify", per_level - 1, "0.50000000"),
-        Event::Delete => ("delete", per_level - 1, "1.00000000"),
+    let events = match case.pattern {
+        // A new price on the free tick just inside the picked level. The book
+        // then has DEPTH + 1 levels and the truncate drops the last one.
+        Pattern::AddNewLevel => {
+            let level = pick_level(case.place, |_| true);
+            let ticks = ask_ticks(level) - 1;
+            vec![Event {
+                kind: "add",
+                order_id: "a-new".to_string(),
+                price: format_ticks(ticks),
+                qty: "1.00000000",
+                ts_secs: slot_secs(DEPTH + 1, 0),
+            }]
+        }
+        // A later order at an existing price, appended after the others.
+        Pattern::AddJoin => {
+            let level = pick_level(case.place, |_| true);
+            vec![Event::existing(
+                "add",
+                level,
+                level_size(level),
+                "1.00000000",
+            )]
+        }
+        // A middle order leaves; the level keeps the rest.
+        Pattern::Cancel => {
+            let level = pick_level(case.place, |size| size >= 3);
+            vec![Event::existing(
+                "delete",
+                level,
+                level_size(level) / 2,
+                "1.00000000",
+            )]
+        }
+        // A partial fill of the oldest order at the touch: same timestamp,
+        // lower quantity, written in place.
+        Pattern::Fill => {
+            let level = pick_level(case.place, |_| true);
+            vec![Event::existing("modify", level, 0, "0.50000000")]
+        }
+        // The only order at a level leaves. Kraken then sends every order at
+        // the price that just entered the top DEPTH, past the deepest level.
+        Pattern::ClearBackfill(adds) => {
+            let level = pick_level(case.place, |size| size == 1);
+            let mut events = vec![Event::existing("delete", level, 0, "1.00000000")];
+            events.extend((0..adds).map(|slot| Event::existing("add", DEPTH, slot, "1.00000000")));
+            events
+        }
     };
     let mut out = String::new();
     out.push_str(
-        r#"{"channel":"level3","type":"update","data":[{"checksum":0,"symbol":"BTC/USD","timestamp":"2026-01-01T01:00:00Z","bids":[],"asks":["#,
+        r#"{"channel":"level3","type":"update","data":[{"checksum":0,"symbol":"BTC/USD","timestamp":"2026-01-01T12:00:00Z","bids":[],"asks":["#,
     );
-    push_order(
-        &mut out,
-        'a',
-        level,
-        slot,
-        &ask_price(level),
-        qty,
-        Some(event),
-    );
+    for (i, event) in events.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        push_order(
+            &mut out,
+            &event.order_id,
+            &event.price,
+            event.qty,
+            event.ts_secs,
+            Some(event.kind),
+        );
+    }
     out.push_str("]}]}");
     out
 }
 
-fn push_side(out: &mut String, side: char, per_level: usize, ask: bool) {
+// The first level at `place`, walking toward the inside of the book, whose
+// order count satisfies `accept`.
+fn pick_level(place: Place, accept: impl Fn(usize) -> bool) -> usize {
+    let found = match place {
+        Place::Begin => (0..DEPTH).find(|&level| accept(level_size(level))),
+        Place::Middle => (MIDDLE_LEVEL..DEPTH).find(|&level| accept(level_size(level))),
+        Place::End => (0..DEPTH).rev().find(|&level| accept(level_size(level))),
+    };
+    found.expect("no level matches")
+}
+
+fn push_side(out: &mut String, side: char, price: fn(usize) -> String) {
     out.push('[');
     for level in 0..DEPTH {
-        for slot in 0..per_level {
+        let price = price(level);
+        for slot in 0..level_size(level) {
             if level > 0 || slot > 0 {
                 out.push(',');
             }
-            let price = if ask {
-                ask_price(level)
-            } else {
-                bid_price(level)
-            };
-            push_order(out, side, level, slot, &price, "1.00000000", None);
+            push_order(
+                out,
+                &order_id(side, level, slot),
+                &price,
+                "1.00000000",
+                slot_secs(level, slot),
+                None,
+            );
         }
     }
     out.push(']');
@@ -221,11 +332,10 @@ fn push_side(out: &mut String, side: char, per_level: usize, ask: bool) {
 
 fn push_order(
     out: &mut String,
-    side: char,
-    level: usize,
-    slot: usize,
+    order_id: &str,
     price: &str,
     qty: &str,
+    ts_secs: usize,
     event: Option<&str>,
 ) {
     out.push('{');
@@ -234,32 +344,33 @@ fn push_order(
     }
     let _ = write!(
         out,
-        "\"order_id\":\"{side}-{level}-{slot}\",\"limit_price\":{price},\"order_qty\":{qty},\"timestamp\":\"{}\"}}",
-        timestamp(level * LEVEL_STRIDE + slot),
+        "\"order_id\":\"{order_id}\",\"limit_price\":{price},\"order_qty\":{qty},\"timestamp\":\"{}\"}}",
+        timestamp(ts_secs),
     );
 }
 
-fn orders_per_level(shape: Shape) -> usize {
-    match shape {
-        Shape::Single => ORDERS_SINGLE,
-        Shape::Multi => ORDERS_MULTI,
-    }
+fn level_size(level: usize) -> usize {
+    LEVEL_SIZES[level % LEVEL_SIZES.len()]
 }
 
-fn level_index(place: Place) -> usize {
-    match place {
-        Place::Begin => 0,
-        Place::Middle => 50,
-        Place::End => DEPTH - 1,
-    }
+fn order_id(side: char, level: usize, slot: usize) -> String {
+    format!("{side}-{level}-{slot}")
+}
+
+fn slot_secs(level: usize, slot: usize) -> usize {
+    level * LEVEL_STRIDE + slot
+}
+
+fn ask_ticks(level: usize) -> usize {
+    1_000_000 + LEVEL_TICKS * level
 }
 
 fn ask_price(level: usize) -> String {
-    format_ticks(1_000_000 + level)
+    format_ticks(ask_ticks(level))
 }
 
 fn bid_price(level: usize) -> String {
-    format_ticks(999_999 - level)
+    format_ticks(999_999 - LEVEL_TICKS * level)
 }
 
 fn format_ticks(ticks: usize) -> String {
@@ -267,7 +378,8 @@ fn format_ticks(ticks: usize) -> String {
 }
 
 fn timestamp(total_secs: usize) -> String {
-    let mins = total_secs / 60;
+    let hours = total_secs / 3600;
+    let mins = total_secs / 60 % 60;
     let secs = total_secs % 60;
-    format!("2026-01-01T00:{mins:02}:{secs:02}Z")
+    format!("2026-01-01T{hours:02}:{mins:02}:{secs:02}Z")
 }

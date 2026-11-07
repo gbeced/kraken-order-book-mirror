@@ -24,7 +24,7 @@ One package, edition 2024. `Cargo.toml` sets no `rust-version`. Edition 2024 nee
 - `src/kraken/level3/units.rs` — `to_units`, `to_decimal`, `serialize_units`.
 - `src/kraken/level3/order_book.rs` — `Order`, `Orders` (sorted vec), `OrderBook`.
 - `src/kraken/level3/mirror.rs` — `OrderBookMirror` state machine, apply, checksum.
-- `benches/mirror.rs` — CodSpeed/Divan harness. Eighteen `on_update` cases. Each applies one ask event to a book built from a 100-level snapshot. The snapshot apply is outside the timer. Cases cross `add` / `modify` / `delete`, ask level 0 / 50 / 99, and 1 or 4 orders per level.
+- `benches/mirror.rs` — CodSpeed/Divan harness. Sixteen `on_update` cases apply one ask-side update frame to a 1000-level snapshot (levels 2 ticks apart, orders per level cycled from `LEVEL_SIZES`). The patterns come from `btc_usd_stream.log`: `add_new_level`, `add_join`, `cancel` (delete that leaves the level non-empty), `fill` (in-place modify at the touch), and `clear_backfill_1` / `_4` (a delete clears a size-1 level, then 1 or 4 adds at the price past the deepest level). Each runs at begin / middle / end, except `fill`, which runs at begin only. Checksums are stamped from a trial apply. `replay_stream` applies every update in `btc_usd_stream.log` at depth 10. Snapshot applies are outside the timer.
 - `benches/to_units.rs`, `benches/serialize_units.rs` — Divan micro-benches for `units::to_units` and `units::serialize_units`. All three are `[[bench]]` entries with `harness = false`.
 - `tests/mirror.rs` — integration tests over the fixtures, using depth `10` and scales `1` / `8`.
 - `tests/data/` — offline fixtures: `level3_snapshot.json`, `level3_update_1.json`, `level3_update_2.json`, `btc_usd_stream.log`
