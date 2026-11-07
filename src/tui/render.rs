@@ -607,7 +607,7 @@ mod tests {
         };
         let card = screen.card_mut("BTC/USD");
         let analysis = Analysis::from_book(asks, bids).unwrap();
-        let now = Ts::now().unwrap();
+        let now = Ts::now();
         let timestamp = Ts(now.0 - age_ms * 1_000_000);
         card.ingest(asks, bids, analysis, timestamp, 1, Instant::now(), now);
         let ctx = Ctx {
