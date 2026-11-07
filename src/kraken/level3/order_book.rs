@@ -1,7 +1,10 @@
-use super::units;
+use super::{units, wire};
 use crate::common::ts::Ts;
+use crate::kraken::level3::wire::EventType;
 use rust_decimal::Decimal;
+use std::cmp::Ordering;
 use std::ops::Index;
+use std::error::Error;
 
 pub struct Order {
     pub order_id: String,
@@ -9,6 +12,15 @@ pub struct Order {
     pub order_qty: u64,
     pub timestamp: Ts,
 }
+
+pub struct OrderEvent {
+    pub order_id: String,
+    pub limit_price: u64,
+    pub order_qty: u64,
+    pub timestamp: Ts,
+    pub event: wire::EventType,
+}
+
 
 // Orders are sorted by limit_price (asc/desc) + timestamp(asc).
 pub struct Orders {
@@ -24,9 +36,30 @@ pub struct OrderBook {
     qty_scale: u8,
 }
 
+impl Order {
+    fn from_event(event: OrderEvent) -> Order {
+        // assert_eq!(event.event, wire::EventType::Add);
+        // Not using From trait because the general expectation is that the conversion is lossless.
+        Order {
+            order_id: event.order_id,
+            limit_price: event.limit_price,
+            order_qty: event.order_qty,
+            timestamp: event.timestamp,
+        }
+    }
+}
+
 impl Orders {
     pub fn new(orders: Vec<Order>, sort_asc: bool) -> Orders {
         Orders { orders, sort_asc }
+    }
+
+    fn cmp_price(&self, price_1: u64, price_2: u64) -> Ordering {
+        let mut ret = price_1.cmp(&price_2);
+        if ! self.sort_asc {
+            ret = ret.reverse();
+        }
+        ret
     }
 
     pub fn len(&self) -> usize {
@@ -39,6 +72,71 @@ impl Orders {
 
     pub fn iter<'a>(&'a self) -> std::slice::Iter<'a, Order> {
         self.orders.iter()
+    }
+
+    pub fn apply_events(&mut self, events: Vec<OrderEvent>) -> Result<(), Box<dyn Error>> {
+        // Events are sorted by price level, but TIMESTAMP ORDER WITHIN THE SAME PRICE LEVEL IS NOT GUARANTEED.
+        let mut events = events;
+        timestamp_sort(& mut events);
+
+        let mut i: usize = 0;
+        for event in events {
+            match event.event {
+                EventType::Add => {
+                    // Find insert location, starting at i-th position.
+                    let delta = match self.orders[i..].iter().enumerate().find(
+                        |(_, o)| self.cmp_price(event.limit_price, o.limit_price).is_lt() || (event.limit_price == o.limit_price && event.timestamp < o.timestamp) 
+                    ) {
+                        Some((pos, _)) => pos,
+                        None => self.orders.len() - i,
+                    };
+                    i += delta;
+                    self.orders.insert(i, Order::from_event(event));
+                }
+                EventType::Modify => {
+                    // Find order by id, starting at i-th position.
+                    let Some((delta, order)) = self.orders[i..].iter_mut().enumerate().find(
+                        |(_, o)| o.order_id == event.order_id
+                    ) else {
+                        return Err("Order not found".into());
+                    };
+                    i += delta;
+                    
+                    // If the timestamp is the same, we can udpate in place.
+                    if order.timestamp == event.timestamp {
+                        order.order_qty = event.order_qty;
+                        i += 1;
+                    }
+                    else {
+                        // Timestamp changed, so order has to be relocated.
+                        order.order_qty = event.order_qty;
+                        order.timestamp = event.timestamp;
+                        // Walk forward until we find the final position for the updated order.
+                        let mut final_pos = i + 1;
+                        for order in self.orders[final_pos..].iter() {
+                            if event.limit_price != order.limit_price || event.timestamp < order.timestamp {
+                                break;
+                            }
+                            final_pos += 1;
+                        }
+                        // Move the order to the end of the range, and bring the rest back forward.
+                        self.orders[i..final_pos].rotate_left(1);
+                    }
+                }
+                EventType::Delete => {
+                    // Find order by id, starting at i-th position.
+                    let Some((delta, _)) = self.orders[i..].iter().enumerate().find(
+                        |(_, o)| o.order_id == event.order_id
+                    ) else {
+                        return Err("Order not found".into());
+                    };
+                    i += delta;
+                    self.orders.remove(i);
+                }
+            }
+        }
+
+        Ok(())
     }
 
     pub fn insert_order(&mut self, order: Order) {
@@ -178,6 +276,31 @@ impl OrderBook {
     }
 }
 
+fn timestamp_sort(events: & mut [OrderEvent]) {
+    for i in 1..events.len() {
+        let prev = &events[i - 1];
+        let curr = &events[i];
+
+        // If we find an out of order event within a price level, move it back were it belongs.
+        if prev.limit_price == curr.limit_price && curr.timestamp < prev.timestamp {
+            // Very unlikely.
+            reorder_last(& mut events[..=i]);
+        }
+    }
+}
+
+#[cold]
+fn reorder_last(events: & mut [OrderEvent]) {
+    let last = events.last().unwrap();
+    let mut i = events.len() - 1;
+    // Get to the position where the last element should be, and move it there by rotating.
+    while i > 0 && last.limit_price == events[i - 1].limit_price && last.timestamp < events[i - 1].timestamp {
+        i -= 1;
+    }
+    let last_pos = events.len();
+    events[i..last_pos].rotate_right(1);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,11 +312,11 @@ mod tests {
     const PRICE_SCALE: u8 = 1;
     const QTY_SCALE: u8 = 8;
 
-    fn build_order(limit_price: Decimal, price_scale: u8, qty_scale: u8) -> Order {
+    fn build_order(limit_price: Decimal) -> Order {
         Order {
             order_id: Uuid::new_v4().simple().to_string(),
-            limit_price: to_units(limit_price, price_scale).expect("price units"),
-            order_qty: to_units(Decimal::from(1), qty_scale).expect("qty units"),
+            limit_price: to_units(limit_price, PRICE_SCALE).expect("price units"),
+            order_qty: to_units(Decimal::from(1), QTY_SCALE).expect("qty units"),
             timestamp: Ts::try_from(chrono::Utc::now()).unwrap(),
         }
     }
@@ -202,10 +325,20 @@ mod tests {
         Orders::new(
             prices
                 .iter()
-                .map(|price| build_order(*price, PRICE_SCALE, QTY_SCALE))
+                .map(|price| build_order(*price))
                 .collect(),
             sort_asc,
         )
+    }
+
+    fn build_event(order_id: &str, limit_price: &str, timestamp: Ts, type_: wire::EventType) -> OrderEvent {
+        OrderEvent {
+            order_id: order_id.to_string(),
+            limit_price: to_units(Decimal::from_str(limit_price).unwrap(), PRICE_SCALE).unwrap(),
+            order_qty: to_units(Decimal::from(1), QTY_SCALE).unwrap(),
+            timestamp: timestamp,
+            event: type_
+        }
     }
 
     #[test]
@@ -300,7 +433,7 @@ mod tests {
         };
         for (price, count) in [(100, 2), (90, 1), (80, 2)] {
             for _ in 0..count {
-                crowded.insert_order(build_order(Decimal::from(price), PRICE_SCALE, QTY_SCALE));
+                crowded.insert_order(build_order(Decimal::from(price)));
             }
         }
         crowded.truncate_price_level(2);
@@ -329,11 +462,7 @@ mod tests {
         let mut orders = build_orders(&prices, true);
 
         for value in ["0.5", "1.5", "3"] {
-            orders.insert_order(build_order(
-                Decimal::from_str(value).unwrap(),
-                PRICE_SCALE,
-                QTY_SCALE,
-            ));
+            orders.insert_order(build_order(Decimal::from_str(value).unwrap()));
         }
 
         assert_eq!(
@@ -356,4 +485,40 @@ mod tests {
             order_to_delete.limit_price
         ));
     }
+
+    #[test]
+    fn timestamp_sort_on_single_price_range() {
+        let now = Ts::now();
+        let mut events = [
+            build_event("2", "1000", Ts(now.0 + 1), wire::EventType::Modify),
+            build_event("0", "1000", Ts(now.0 - 1), wire::EventType::Add),
+            build_event("1", "1000", now, wire::EventType::Delete),
+        ];
+        timestamp_sort(& mut events);
+
+        assert_eq!(events.len(), 3);
+        events.iter().enumerate().for_each(|(i, e)| {
+            assert_eq!(e.order_id, i.to_string());
+        });
+    }
+
+    #[test]
+    fn timestamp_sort_on_multiple_price_ranges() {
+        let now = Ts::now();
+        let mut events = [
+            build_event("2", "1000", Ts(now.0 + 1), wire::EventType::Modify),
+            build_event("0", "1000", Ts(now.0 - 1), wire::EventType::Add),
+            build_event("1", "1000", now, wire::EventType::Delete),
+            build_event("5", "2000", Ts(now.0 + 1), wire::EventType::Delete),
+            build_event("3", "2000", Ts(now.0 - 1), wire::EventType::Modify),
+            build_event("4", "2000", now, wire::EventType::Add),
+        ];
+        timestamp_sort(& mut events);
+
+        assert_eq!(events.len(), 6);
+        events.iter().enumerate().for_each(|(i, e)| {
+            assert_eq!(e.order_id, i.to_string());
+        });
+    }
+
 }
