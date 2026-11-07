@@ -2,7 +2,7 @@ use std::fmt::Write;
 
 use rust_order_book_mirror::kraken::level3::mirror::OrderBookMirror;
 
-const DEPTH: usize = 100;
+const DEPTH: usize = 1000;
 const PRICE_SCALE: u8 = 1;
 const QTY_SCALE: u8 = 8;
 // Seconds between the first order of adjacent levels. An added order uses the
@@ -267,7 +267,8 @@ fn format_ticks(ticks: usize) -> String {
 }
 
 fn timestamp(total_secs: usize) -> String {
-    let mins = total_secs / 60;
+    let hours = total_secs / 3600;
+    let mins = total_secs / 60 % 60;
     let secs = total_secs % 60;
-    format!("2026-01-01T00:{mins:02}:{secs:02}Z")
+    format!("2026-01-01T{hours:02}:{mins:02}:{secs:02}Z")
 }
