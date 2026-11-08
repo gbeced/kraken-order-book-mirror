@@ -21,7 +21,7 @@ pub struct Payload<T> {
 }
 
 #[derive(Deserialize)]
-pub struct WireOrder {
+pub struct Order {
     pub order_id: String,
     #[serde(with = "rust_decimal::serde::arbitrary_precision")]
     pub limit_price: Decimal,
@@ -40,7 +40,7 @@ pub enum EventType {
 }
 
 #[derive(Deserialize)]
-pub struct WireOrderEvent {
+pub struct OrderEvent {
     pub order_id: String,
     #[serde(with = "rust_decimal::serde::arbitrary_precision")]
     pub limit_price: Decimal,

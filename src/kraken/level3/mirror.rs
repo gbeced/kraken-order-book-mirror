@@ -12,8 +12,8 @@ struct OrderEvent {
     event: wire::EventType,
 }
 
-type SnapshotMsg = wire::Envelope<wire::Payload<wire::WireOrder>>;
-type UpdateMsg = wire::Envelope<wire::Payload<wire::WireOrderEvent>>;
+type SnapshotMsg = wire::Envelope<wire::Payload<wire::Order>>;
+type UpdateMsg = wire::Envelope<wire::Payload<wire::OrderEvent>>;
 type Snapshot = wire::Payload<order_book::Order>;
 type Update = wire::Payload<OrderEvent>;
 
@@ -42,7 +42,7 @@ pub struct OrderBookMirror {
 
 impl OrderEvent {
     fn try_from_wire(
-        wire_update: wire::WireOrderEvent,
+        wire_update: wire::OrderEvent,
         price_scale: u8,
         qty_scale: u8,
     ) -> Result<OrderEvent, Box<dyn Error>> {
@@ -58,7 +58,7 @@ impl OrderEvent {
 
 impl Snapshot {
     fn try_from_wire(
-        snapshot: wire::Payload<wire::WireOrder>,
+        snapshot: wire::Payload<wire::Order>,
         price_scale: u8,
         qty_scale: u8,
     ) -> Result<Snapshot, Box<dyn Error>> {
@@ -85,7 +85,7 @@ impl Snapshot {
 
 impl Update {
     fn try_from_wire(
-        update: wire::Payload<wire::WireOrderEvent>,
+        update: wire::Payload<wire::OrderEvent>,
         price_scale: u8,
         qty_scale: u8,
     ) -> Result<Update, Box<dyn Error>> {
@@ -286,7 +286,7 @@ impl order_book::Order {
     }
 
     fn try_from_wire(
-        wire_order: wire::WireOrder,
+        wire_order: wire::Order,
         price_scale: u8,
         qty_scale: u8,
     ) -> Result<order_book::Order, Box<dyn Error>> {
