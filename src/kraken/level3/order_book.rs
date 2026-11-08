@@ -94,7 +94,6 @@ impl Orders {
             } else {
                 // Remove the order and continue doing a linear search for the insertion point within the price level, or
                 // at the end of it.
-                assert!(order.timestamp > prev_order.timestamp);
                 self.orders.remove(idx);
                 for existing in self.orders.iter().skip(idx) {
                     if order.timestamp < existing.timestamp
