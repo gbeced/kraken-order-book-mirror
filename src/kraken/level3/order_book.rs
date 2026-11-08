@@ -87,24 +87,20 @@ impl Orders {
     }
 
     pub fn modify_order(&mut self, order: Order) -> bool {
-        if let Some((mut idx, prev_order)) = self.find_order(&order.order_id, order.limit_price) {
-            if prev_order.timestamp == order.timestamp {
-                // Update the qty in place.
-                prev_order.order_qty = order.order_qty;
-            } else {
-                // Remove the order and continue doing a linear search for the insertion point within the price level, or
-                // at the end of it.
-                self.orders.remove(idx);
-                for existing in self.orders.iter().skip(idx) {
-                    if order.timestamp < existing.timestamp
-                        || existing.limit_price != order.limit_price
-                    {
-                        break;
-                    }
-                    idx += 1;
-                }
-
-                self.orders.insert(idx, order);
+        if let Some((idx, prev_order)) = self.find_order(&order.order_id, order.limit_price) {
+            prev_order.order_qty = order.order_qty;
+            if prev_order.timestamp != order.timestamp {
+                // The order has to be relocated.
+                prev_order.timestamp = order.timestamp;
+                // Continue doing a linear search for the destination point within the price level, or at the end of it.
+                let end = match self.orders[idx+1..].iter().enumerate().find(|(_, o)| {
+                        order.timestamp < o.timestamp || o.limit_price != order.limit_price
+                }) {
+                    Some((pos, _)) => idx + 1 + pos,
+                    None => self.orders.len()
+                };
+                // Move the order at the end.
+                self.orders[idx..end].rotate_left(1);
             }
             true
         } else {
