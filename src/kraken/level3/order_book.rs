@@ -46,7 +46,7 @@ pub struct Order {
 }
 
 impl Order {
-    pub fn from(event: OrderEvent) -> Order {
+    pub fn from_event(event: OrderEvent) -> Order {
         // Not using From trait because according to the docs the general expectation is that the conversion is lossless.
         Order {
             order_id: event.order_id,
@@ -56,7 +56,7 @@ impl Order {
         }
     }
 
-    pub fn try_from(
+    pub fn try_from_wire(
         wire_order: wire::Order,
         price_scale: u8,
         qty_scale: u8,
@@ -79,7 +79,7 @@ pub struct OrderEvent {
 }
 
 impl OrderEvent {
-    pub fn try_from(
+    pub fn try_from_wire(
         wire_update: wire::OrderEvent,
         price_scale: u8,
         qty_scale: u8,
@@ -219,7 +219,7 @@ impl Orders {
             match event.event {
                 // A new order added to the book.
                 wire::EventType::Add => {
-                    self.insert_order(Order::from(event));
+                    self.insert_order(Order::from_event(event));
                 }
                 // The order has been removed from the book, i.e. full fill or cancel.
                 wire::EventType::Delete => {
@@ -229,7 +229,7 @@ impl Orders {
                 }
                 // The order quantity has been modified, i.e. a fill.
                 wire::EventType::Modify => {
-                    if !self.modify_order(Order::from(event)) {
+                    if !self.modify_order(Order::from_event(event)) {
                         return Err("Order not found".into());
                     }
                 }

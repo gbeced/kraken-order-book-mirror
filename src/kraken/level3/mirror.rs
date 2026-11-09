@@ -47,7 +47,7 @@ impl OrderBookMirror {
         let price_scale = self.context.price_scale;
         let qty_scale = self.context.qty_scale;
         snapshot_msg.data.into_iter().try_for_each(|wire_order| {
-            let snapshot = Snapshot::try_from(wire_order, price_scale, qty_scale)?;
+            let snapshot = Snapshot::try_from_wire(wire_order, price_scale, qty_scale)?;
             self.state.on_snapshot(&self.context, snapshot)
         })
     }
@@ -56,7 +56,7 @@ impl OrderBookMirror {
         let price_scale = self.context.price_scale;
         let qty_scale = self.context.qty_scale;
         update_msg.data.into_iter().try_for_each(|wire_update| {
-            let update = Update::try_from(wire_update, price_scale, qty_scale)?;
+            let update = Update::try_from_wire(wire_update, price_scale, qty_scale)?;
             self.state.on_update(&self.context, update)
         })
     }
@@ -198,7 +198,7 @@ impl OrderBookUpdater {
 }
 
 impl Snapshot {
-    fn try_from(
+    fn try_from_wire(
         snapshot: wire::Payload<wire::Order>,
         price_scale: u8,
         qty_scale: u8,
@@ -209,19 +209,23 @@ impl Snapshot {
             bids: snapshot
                 .bids
                 .into_iter()
-                .map(|wire_order| order_book::Order::try_from(wire_order, price_scale, qty_scale))
+                .map(|wire_order| {
+                    order_book::Order::try_from_wire(wire_order, price_scale, qty_scale)
+                })
                 .collect::<Result<Vec<_>, _>>()?,
             asks: snapshot
                 .asks
                 .into_iter()
-                .map(|wire_order| order_book::Order::try_from(wire_order, price_scale, qty_scale))
+                .map(|wire_order| {
+                    order_book::Order::try_from_wire(wire_order, price_scale, qty_scale)
+                })
                 .collect::<Result<Vec<_>, _>>()?,
         })
     }
 }
 
 impl Update {
-    fn try_from(
+    fn try_from_wire(
         update: wire::Payload<wire::OrderEvent>,
         price_scale: u8,
         qty_scale: u8,
@@ -233,14 +237,14 @@ impl Update {
                 .bids
                 .into_iter()
                 .map(|wire_update| {
-                    order_book::OrderEvent::try_from(wire_update, price_scale, qty_scale)
+                    order_book::OrderEvent::try_from_wire(wire_update, price_scale, qty_scale)
                 })
                 .collect::<Result<Vec<_>, _>>()?,
             asks: update
                 .asks
                 .into_iter()
                 .map(|wire_event| {
-                    order_book::OrderEvent::try_from(wire_event, price_scale, qty_scale)
+                    order_book::OrderEvent::try_from_wire(wire_event, price_scale, qty_scale)
                 })
                 .collect::<Result<Vec<_>, _>>()?,
         })
