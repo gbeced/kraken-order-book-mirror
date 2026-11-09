@@ -5,7 +5,7 @@ use serde_json::json;
 use std::error::Error;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
-use tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 // Faster, but error prone.
 // pub fn is_channel_level3(msg: &str) -> bool {
