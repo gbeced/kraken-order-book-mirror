@@ -2,7 +2,11 @@
 name = "rust-order-book-mirror"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.99"
+description = "Mirrors Kraken's level3 (order-by-order) book over WebSocket v2 and shows it in a terminal dashboard"
 license = "Apache-2.0"
+repository = "https://github.com/gbeced/kraken-order-book-mirror"
+publish = false
 
 [dependencies]
 base64 = "0.23.1"
