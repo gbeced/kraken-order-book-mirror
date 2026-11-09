@@ -1,21 +1,12 @@
 use super::units;
 use super::{order_book, wire};
-use crate::common::ts::Ts;
 use std::cell::RefCell;
 use std::error::Error;
-
-struct OrderEvent {
-    order_id: String,
-    limit_price: u64,
-    order_qty: u64,
-    timestamp: Ts,
-    event: wire::EventType,
-}
 
 type SnapshotMsg = wire::Envelope<wire::Payload<wire::Order>>;
 type UpdateMsg = wire::Envelope<wire::Payload<wire::OrderEvent>>;
 type Snapshot = wire::Payload<order_book::Order>;
-type Update = wire::Payload<OrderEvent>;
+type Update = wire::Payload<order_book::OrderEvent>;
 
 struct OrderBookUpdater {
     order_book: order_book::OrderBook,
@@ -38,22 +29,6 @@ struct MirrorContext {
 pub struct OrderBookMirror {
     context: MirrorContext,
     state: MirrorState,
-}
-
-impl OrderEvent {
-    fn try_from_wire(
-        wire_update: wire::OrderEvent,
-        price_scale: u8,
-        qty_scale: u8,
-    ) -> Result<OrderEvent, Box<dyn Error>> {
-        Ok(OrderEvent {
-            order_id: wire_update.order_id,
-            limit_price: units::to_units(wire_update.limit_price, price_scale)?,
-            order_qty: units::to_units(wire_update.order_qty, qty_scale)?,
-            timestamp: wire_update.timestamp,
-            event: wire_update.event,
-        })
-    }
 }
 
 impl Snapshot {
@@ -95,12 +70,16 @@ impl Update {
             bids: update
                 .bids
                 .into_iter()
-                .map(|wire_update| OrderEvent::try_from_wire(wire_update, price_scale, qty_scale))
+                .map(|wire_update| {
+                    order_book::OrderEvent::try_from_wire(wire_update, price_scale, qty_scale)
+                })
                 .collect::<Result<Vec<_>, _>>()?,
             asks: update
                 .asks
                 .into_iter()
-                .map(|wire_event| OrderEvent::try_from_wire(wire_event, price_scale, qty_scale))
+                .map(|wire_event| {
+                    order_book::OrderEvent::try_from_wire(wire_event, price_scale, qty_scale)
+                })
                 .collect::<Result<Vec<_>, _>>()?,
         })
     }
@@ -273,35 +252,9 @@ impl OrderBookMirror {
     }
 }
 
-impl order_book::Order {
-    fn from_event(event: OrderEvent) -> order_book::Order {
-        // assert_eq!(event.event, wire::EventType::Add);
-        // Not using From trait because the general expectation is that the conversion is lossless.
-        order_book::Order {
-            order_id: event.order_id,
-            limit_price: event.limit_price,
-            order_qty: event.order_qty,
-            timestamp: event.timestamp,
-        }
-    }
-
-    fn try_from_wire(
-        wire_order: wire::Order,
-        price_scale: u8,
-        qty_scale: u8,
-    ) -> Result<order_book::Order, Box<dyn Error>> {
-        Ok(order_book::Order {
-            order_id: wire_order.order_id,
-            limit_price: units::to_units(wire_order.limit_price, price_scale)?,
-            order_qty: units::to_units(wire_order.order_qty, qty_scale)?,
-            timestamp: wire_order.timestamp,
-        })
-    }
-}
-
 fn apply_events(
     orders: &mut order_book::Orders,
-    events: Vec<OrderEvent>,
+    events: Vec<order_book::OrderEvent>,
 ) -> Result<(), Box<dyn Error>> {
     for event in events {
         match event.event {
@@ -329,6 +282,7 @@ fn apply_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::ts::Ts;
     use rust_decimal::Decimal;
     use units::to_units;
     use uuid::Uuid;
@@ -347,8 +301,8 @@ mod tests {
         limit_price: Decimal,
         price_scale: u8,
         qty_scale: u8,
-    ) -> OrderEvent {
-        OrderEvent {
+    ) -> order_book::OrderEvent {
+        order_book::OrderEvent {
             order_id: Uuid::new_v4().simple().to_string(),
             limit_price: to_units(limit_price, price_scale).expect("price units"),
             order_qty: to_units(Decimal::from(1), qty_scale).expect("qty units"),
@@ -383,7 +337,7 @@ mod tests {
         };
 
         // This update should end up being ignored since all levels should get inserted past the end.
-        let bids: Vec<OrderEvent> = (20..25)
+        let bids: Vec<order_book::OrderEvent> = (20..25)
             .into_iter()
             .map(|i| {
                 build_order_event(
@@ -394,7 +348,7 @@ mod tests {
                 )
             })
             .collect();
-        let asks: Vec<OrderEvent> = (20..25)
+        let asks: Vec<order_book::OrderEvent> = (20..25)
             .into_iter()
             .map(|i| {
                 build_order_event(
@@ -439,7 +393,7 @@ mod tests {
 
         // This update should get the snapshot truncated since 5 levels should have been inserted right at the
         // beginning.
-        let bids: Vec<OrderEvent> = (0..5)
+        let bids: Vec<order_book::OrderEvent> = (0..5)
             .into_iter()
             .map(|i| {
                 build_order_event(
@@ -450,7 +404,7 @@ mod tests {
                 )
             })
             .collect();
-        let asks: Vec<OrderEvent> = (0..5)
+        let asks: Vec<order_book::OrderEvent> = (0..5)
             .into_iter()
             .map(|i| {
                 build_order_event(

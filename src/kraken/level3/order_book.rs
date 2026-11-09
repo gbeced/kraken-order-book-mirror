@@ -1,6 +1,7 @@
-use super::units;
+use super::{units, wire};
 use crate::common::ts::Ts;
 use rust_decimal::Decimal;
+use std::error::Error;
 use std::ops::Index;
 
 pub struct Order {
@@ -8,6 +9,14 @@ pub struct Order {
     pub limit_price: u64,
     pub order_qty: u64,
     pub timestamp: Ts,
+}
+
+pub struct OrderEvent {
+    pub order_id: String,
+    pub limit_price: u64,
+    pub order_qty: u64,
+    pub timestamp: Ts,
+    pub event: wire::EventType,
 }
 
 // Orders are sorted by limit_price (asc/desc) + timestamp(asc).
@@ -22,6 +31,47 @@ pub struct OrderBook {
     pub timestamp: Ts,
     price_scale: u8,
     qty_scale: u8,
+}
+
+impl OrderEvent {
+    pub fn try_from_wire(
+        wire_update: wire::OrderEvent,
+        price_scale: u8,
+        qty_scale: u8,
+    ) -> Result<OrderEvent, Box<dyn Error>> {
+        Ok(OrderEvent {
+            order_id: wire_update.order_id,
+            limit_price: units::to_units(wire_update.limit_price, price_scale)?,
+            order_qty: units::to_units(wire_update.order_qty, qty_scale)?,
+            timestamp: wire_update.timestamp,
+            event: wire_update.event,
+        })
+    }
+}
+
+impl Order {
+    pub fn from_event(event: OrderEvent) -> Order {
+        // Not using From trait because the general expectation is that the conversion is lossless.
+        Order {
+            order_id: event.order_id,
+            limit_price: event.limit_price,
+            order_qty: event.order_qty,
+            timestamp: event.timestamp,
+        }
+    }
+
+    pub fn try_from_wire(
+        wire_order: wire::Order,
+        price_scale: u8,
+        qty_scale: u8,
+    ) -> Result<Order, Box<dyn Error>> {
+        Ok(Order {
+            order_id: wire_order.order_id,
+            limit_price: units::to_units(wire_order.limit_price, price_scale)?,
+            order_qty: units::to_units(wire_order.order_qty, qty_scale)?,
+            timestamp: wire_order.timestamp,
+        })
+    }
 }
 
 impl Orders {
