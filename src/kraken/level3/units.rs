@@ -26,7 +26,7 @@ pub fn to_units(value: Decimal, scale: u8) -> Result<u64, Box<dyn Error>> {
         mantissa / factor
     };
 
-    u64::try_from(units).map_err(|_| { "unit count does not fit in u64".into() })
+    u64::try_from(units).map_err(|_| "unit count does not fit in u64".into())
 }
 
 pub fn to_decimal(units: u64, scale: u8) -> Decimal {

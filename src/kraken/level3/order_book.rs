@@ -143,11 +143,11 @@ impl Orders {
                 // The order has to be relocated.
                 prev_order.timestamp = order.timestamp;
                 // Continue doing a linear search for the destination point within the price level, or at the end of it.
-                let end = match self.orders[idx+1..].iter().enumerate().find(|(_, o)| {
-                        order.timestamp < o.timestamp || o.limit_price != order.limit_price
+                let end = match self.orders[idx + 1..].iter().enumerate().find(|(_, o)| {
+                    order.timestamp < o.timestamp || o.limit_price != order.limit_price
                 }) {
                     Some((pos, _)) => idx + 1 + pos,
-                    None => self.orders.len()
+                    None => self.orders.len(),
                 };
                 // Move the order at the end.
                 self.orders[idx..end].rotate_left(1);

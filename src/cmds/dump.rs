@@ -1,5 +1,5 @@
 use crate::config;
-use crate::kraken::level3::{websockets};
+use crate::kraken::level3::websockets;
 use std::error::Error;
 use tokio::sync::mpsc;
 
@@ -23,4 +23,3 @@ pub async fn run(pair: String, depth: usize) -> Result<(), Box<dyn Error>> {
     let _ = consumer.await;
     res.map_err(|e| e.into())
 }
-
