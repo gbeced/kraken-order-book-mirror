@@ -34,7 +34,7 @@ pub struct OrderBook {
 }
 
 impl OrderEvent {
-    pub fn try_from_wire(
+    pub fn try_from(
         wire_update: wire::OrderEvent,
         price_scale: u8,
         qty_scale: u8,
@@ -50,8 +50,8 @@ impl OrderEvent {
 }
 
 impl Order {
-    pub fn from_event(event: OrderEvent) -> Order {
-        // Not using From trait because the general expectation is that the conversion is lossless.
+    pub fn from(event: OrderEvent) -> Order {
+        // Not using From trait because according to the docs the general expectation is that the conversion is lossless.
         Order {
             order_id: event.order_id,
             limit_price: event.limit_price,
@@ -60,7 +60,7 @@ impl Order {
         }
     }
 
-    pub fn try_from_wire(
+    pub fn try_from(
         wire_order: wire::Order,
         price_scale: u8,
         qty_scale: u8,

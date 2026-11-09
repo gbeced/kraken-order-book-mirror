@@ -32,7 +32,7 @@ pub struct OrderBookMirror {
 }
 
 impl Snapshot {
-    fn try_from_wire(
+    fn try_from(
         snapshot: wire::Payload<wire::Order>,
         price_scale: u8,
         qty_scale: u8,
@@ -43,23 +43,19 @@ impl Snapshot {
             bids: snapshot
                 .bids
                 .into_iter()
-                .map(|wire_order| {
-                    order_book::Order::try_from_wire(wire_order, price_scale, qty_scale)
-                })
+                .map(|wire_order| order_book::Order::try_from(wire_order, price_scale, qty_scale))
                 .collect::<Result<Vec<_>, _>>()?,
             asks: snapshot
                 .asks
                 .into_iter()
-                .map(|wire_order| {
-                    order_book::Order::try_from_wire(wire_order, price_scale, qty_scale)
-                })
+                .map(|wire_order| order_book::Order::try_from(wire_order, price_scale, qty_scale))
                 .collect::<Result<Vec<_>, _>>()?,
         })
     }
 }
 
 impl Update {
-    fn try_from_wire(
+    fn try_from(
         update: wire::Payload<wire::OrderEvent>,
         price_scale: u8,
         qty_scale: u8,
@@ -71,14 +67,14 @@ impl Update {
                 .bids
                 .into_iter()
                 .map(|wire_update| {
-                    order_book::OrderEvent::try_from_wire(wire_update, price_scale, qty_scale)
+                    order_book::OrderEvent::try_from(wire_update, price_scale, qty_scale)
                 })
                 .collect::<Result<Vec<_>, _>>()?,
             asks: update
                 .asks
                 .into_iter()
                 .map(|wire_event| {
-                    order_book::OrderEvent::try_from_wire(wire_event, price_scale, qty_scale)
+                    order_book::OrderEvent::try_from(wire_event, price_scale, qty_scale)
                 })
                 .collect::<Result<Vec<_>, _>>()?,
         })
@@ -237,7 +233,7 @@ impl OrderBookMirror {
         let price_scale = self.context.price_scale;
         let qty_scale = self.context.qty_scale;
         snapshot_msg.data.into_iter().try_for_each(|wire_order| {
-            let snapshot = Snapshot::try_from_wire(wire_order, price_scale, qty_scale)?;
+            let snapshot = Snapshot::try_from(wire_order, price_scale, qty_scale)?;
             self.state.on_snapshot(&self.context, snapshot)
         })
     }
@@ -246,7 +242,7 @@ impl OrderBookMirror {
         let price_scale = self.context.price_scale;
         let qty_scale = self.context.qty_scale;
         update_msg.data.into_iter().try_for_each(|wire_update| {
-            let update = Update::try_from_wire(wire_update, price_scale, qty_scale)?;
+            let update = Update::try_from(wire_update, price_scale, qty_scale)?;
             self.state.on_update(&self.context, update)
         })
     }
@@ -260,7 +256,7 @@ fn apply_events(
         match event.event {
             // A new order added to the book.
             wire::EventType::Add => {
-                orders.insert_order(order_book::Order::from_event(event));
+                orders.insert_order(order_book::Order::from(event));
             }
             // The order has been removed from the book, i.e. full fill or cancel.
             wire::EventType::Delete => {
@@ -270,7 +266,7 @@ fn apply_events(
             }
             // The order quantity has been modified, i.e. a fill.
             wire::EventType::Modify => {
-                if !orders.modify_order(order_book::Order::from_event(event)) {
+                if !orders.modify_order(order_book::Order::from(event)) {
                     return Err("Order not found".into());
                 }
             }
