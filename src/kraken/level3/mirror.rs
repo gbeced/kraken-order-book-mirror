@@ -8,195 +8,9 @@ type UpdateMsg = wire::Envelope<wire::Payload<wire::OrderEvent>>;
 type Snapshot = wire::Payload<order_book::Order>;
 type Update = wire::Payload<order_book::OrderEvent>;
 
-struct OrderBookUpdater {
-    order_book: order_book::OrderBook,
-    max_depth: usize,
-    serializer_buff: RefCell<String>,
-}
-
-enum MirrorState {
-    WaitingSnapshot,
-    WaitingUpdate { updater: OrderBookUpdater },
-    Invalid,
-}
-
-struct MirrorContext {
-    max_depth: usize,
-    price_scale: u8,
-    qty_scale: u8,
-}
-
 pub struct OrderBookMirror {
     context: MirrorContext,
     state: MirrorState,
-}
-
-impl Snapshot {
-    fn try_from(
-        snapshot: wire::Payload<wire::Order>,
-        price_scale: u8,
-        qty_scale: u8,
-    ) -> Result<Snapshot, Box<dyn Error>> {
-        Ok(Snapshot {
-            checksum: snapshot.checksum,
-            timestamp: snapshot.timestamp,
-            bids: snapshot
-                .bids
-                .into_iter()
-                .map(|wire_order| order_book::Order::try_from(wire_order, price_scale, qty_scale))
-                .collect::<Result<Vec<_>, _>>()?,
-            asks: snapshot
-                .asks
-                .into_iter()
-                .map(|wire_order| order_book::Order::try_from(wire_order, price_scale, qty_scale))
-                .collect::<Result<Vec<_>, _>>()?,
-        })
-    }
-}
-
-impl Update {
-    fn try_from(
-        update: wire::Payload<wire::OrderEvent>,
-        price_scale: u8,
-        qty_scale: u8,
-    ) -> Result<Update, Box<dyn Error>> {
-        Ok(Update {
-            checksum: update.checksum,
-            timestamp: update.timestamp,
-            bids: update
-                .bids
-                .into_iter()
-                .map(|wire_update| {
-                    order_book::OrderEvent::try_from(wire_update, price_scale, qty_scale)
-                })
-                .collect::<Result<Vec<_>, _>>()?,
-            asks: update
-                .asks
-                .into_iter()
-                .map(|wire_event| {
-                    order_book::OrderEvent::try_from(wire_event, price_scale, qty_scale)
-                })
-                .collect::<Result<Vec<_>, _>>()?,
-        })
-    }
-}
-
-impl OrderBookUpdater {
-    fn new(
-        snapshot: Snapshot,
-        max_depth: usize,
-        price_scale: u8,
-        qty_scale: u8,
-    ) -> OrderBookUpdater {
-        let asks = order_book::Orders::new(snapshot.asks, true);
-        let bids = order_book::Orders::new(snapshot.bids, false);
-        let order_book =
-            order_book::OrderBook::new(asks, bids, snapshot.timestamp, price_scale, qty_scale);
-        OrderBookUpdater {
-            order_book,
-            max_depth,
-            serializer_buff: RefCell::new(String::with_capacity(max_depth * 2 * 10)),
-        }
-    }
-
-    fn update(&mut self, update: Update) -> Result<(), Box<dyn Error>> {
-        // If any of these fail, the order book ends up in an invalid state.
-        apply_events(&mut self.order_book.asks, update.asks)?;
-        self.order_book.asks.truncate_price_level(self.max_depth);
-        apply_events(&mut self.order_book.bids, update.bids)?;
-        self.order_book.bids.truncate_price_level(self.max_depth);
-
-        let calculated = self.calculate_checksum();
-        if calculated != update.checksum {
-            return Err(format!(
-                "Checksum mismatch after update. Calculated: {}. Update: {}",
-                calculated, update.checksum
-            )
-            .into());
-        }
-        self.order_book.timestamp = update.timestamp;
-        Ok(())
-    }
-
-    pub fn get_order_book(&self) -> &order_book::OrderBook {
-        &self.order_book
-    }
-
-    fn calculate_checksum(&self) -> u32 {
-        let obook = self.get_order_book();
-
-        // https://docs.kraken.com/exchange/guides/websockets/l3-checksum-v2
-        // Kraken hashes only the top 10 price levels for the checksum.
-        const CHECKSUM_PRICE_LEVELS: usize = 10;
-        let ask_count = obook
-            .asks
-            .find_price_level(CHECKSUM_PRICE_LEVELS)
-            .unwrap_or(obook.asks.len());
-        let bid_count = obook
-            .bids
-            .find_price_level(CHECKSUM_PRICE_LEVELS)
-            .unwrap_or(obook.bids.len());
-        let mut buff = self.serializer_buff.borrow_mut();
-
-        buff.clear();
-        for order in obook
-            .asks
-            .iter()
-            .take(ask_count)
-            .chain(obook.bids.iter().take(bid_count))
-        {
-            units::serialize_units(order.limit_price, &mut buff);
-            units::serialize_units(order.order_qty, &mut buff);
-        }
-        crc32fast::hash(buff.as_bytes())
-    }
-}
-
-impl MirrorState {
-    fn on_snapshot(
-        &mut self,
-        context: &MirrorContext,
-        snapshot: Snapshot,
-    ) -> Result<(), Box<dyn Error>> {
-        match self {
-            MirrorState::WaitingSnapshot => {
-                *self = MirrorState::WaitingUpdate {
-                    updater: OrderBookUpdater::new(
-                        snapshot,
-                        context.max_depth,
-                        context.price_scale,
-                        context.qty_scale,
-                    ),
-                };
-                Ok(())
-            }
-            MirrorState::WaitingUpdate { .. } => {
-                *self = MirrorState::Invalid;
-                Err("Expected update but received snapshot".into())
-            }
-            MirrorState::Invalid => Err("Received snapshot in an invalid state".into()),
-        }
-    }
-
-    fn on_update(
-        &mut self,
-        _context: &MirrorContext,
-        update: Update,
-    ) -> Result<(), Box<dyn Error>> {
-        match self {
-            MirrorState::WaitingSnapshot => {
-                *self = MirrorState::Invalid;
-                Err("Expected snapshot but received update".into())
-            }
-            MirrorState::WaitingUpdate { updater } => {
-                updater.update(update).inspect_err(|_| {
-                    // If update failed then the order book is now in an invalid state and we should drop it.
-                    *self = MirrorState::Invalid;
-                })
-            }
-            MirrorState::Invalid => Err("Received update in an invalid state".into()),
-        }
-    }
 }
 
 impl OrderBookMirror {
@@ -247,32 +61,190 @@ impl OrderBookMirror {
         })
     }
 }
+struct MirrorContext {
+    max_depth: usize,
+    price_scale: u8,
+    qty_scale: u8,
+}
 
-fn apply_events(
-    orders: &mut order_book::Orders,
-    events: Vec<order_book::OrderEvent>,
-) -> Result<(), Box<dyn Error>> {
-    for event in events {
-        match event.event {
-            // A new order added to the book.
-            wire::EventType::Add => {
-                orders.insert_order(order_book::Order::from(event));
+enum MirrorState {
+    WaitingSnapshot,
+    WaitingUpdate { updater: OrderBookUpdater },
+    Invalid,
+}
+
+impl MirrorState {
+    fn on_snapshot(
+        &mut self,
+        context: &MirrorContext,
+        snapshot: Snapshot,
+    ) -> Result<(), Box<dyn Error>> {
+        match self {
+            MirrorState::WaitingSnapshot => {
+                *self = MirrorState::WaitingUpdate {
+                    updater: OrderBookUpdater::new(
+                        snapshot,
+                        context.max_depth,
+                        context.price_scale,
+                        context.qty_scale,
+                    ),
+                };
+                Ok(())
             }
-            // The order has been removed from the book, i.e. full fill or cancel.
-            wire::EventType::Delete => {
-                if !orders.remove_order(&event.order_id, event.limit_price) {
-                    return Err(format!("Order not found {}", event.order_id).into());
-                }
+            MirrorState::WaitingUpdate { .. } => {
+                *self = MirrorState::Invalid;
+                Err("Expected update but received snapshot".into())
             }
-            // The order quantity has been modified, i.e. a fill.
-            wire::EventType::Modify => {
-                if !orders.modify_order(order_book::Order::from(event)) {
-                    return Err("Order not found".into());
-                }
-            }
+            MirrorState::Invalid => Err("Received snapshot in an invalid state".into()),
         }
     }
-    Ok(())
+
+    fn on_update(
+        &mut self,
+        _context: &MirrorContext,
+        update: Update,
+    ) -> Result<(), Box<dyn Error>> {
+        match self {
+            MirrorState::WaitingSnapshot => {
+                *self = MirrorState::Invalid;
+                Err("Expected snapshot but received update".into())
+            }
+            MirrorState::WaitingUpdate { updater } => {
+                updater.update(update).inspect_err(|_| {
+                    // If update failed then the order book is now in an invalid state and we should drop it.
+                    *self = MirrorState::Invalid;
+                })
+            }
+            MirrorState::Invalid => Err("Received update in an invalid state".into()),
+        }
+    }
+}
+
+struct OrderBookUpdater {
+    order_book: order_book::OrderBook,
+    max_depth: usize,
+    serializer_buff: RefCell<String>,
+}
+
+impl OrderBookUpdater {
+    fn new(
+        snapshot: Snapshot,
+        max_depth: usize,
+        price_scale: u8,
+        qty_scale: u8,
+    ) -> OrderBookUpdater {
+        let asks = order_book::Orders::new(snapshot.asks, true);
+        let bids = order_book::Orders::new(snapshot.bids, false);
+        let order_book =
+            order_book::OrderBook::new(asks, bids, snapshot.timestamp, price_scale, qty_scale);
+        OrderBookUpdater {
+            order_book,
+            max_depth,
+            serializer_buff: RefCell::new(String::with_capacity(max_depth * 2 * 10)),
+        }
+    }
+
+    fn update(&mut self, update: Update) -> Result<(), Box<dyn Error>> {
+        // If any of these fail, the order book ends up in an invalid state.
+        self.order_book.asks.apply_events(update.asks)?;
+        self.order_book.asks.truncate_price_level(self.max_depth);
+        self.order_book.bids.apply_events(update.bids)?;
+        self.order_book.bids.truncate_price_level(self.max_depth);
+
+        let calculated = self.calculate_checksum();
+        if calculated != update.checksum {
+            return Err(format!(
+                "Checksum mismatch after update. Calculated: {}. Update: {}",
+                calculated, update.checksum
+            )
+            .into());
+        }
+        self.order_book.timestamp = update.timestamp;
+        Ok(())
+    }
+
+    pub fn get_order_book(&self) -> &order_book::OrderBook {
+        &self.order_book
+    }
+
+    fn calculate_checksum(&self) -> u32 {
+        let obook = self.get_order_book();
+
+        // https://docs.kraken.com/exchange/guides/websockets/l3-checksum-v2
+        // Kraken hashes only the top 10 price levels for the checksum.
+        const CHECKSUM_PRICE_LEVELS: usize = 10;
+        let ask_count = obook
+            .asks
+            .find_price_level(CHECKSUM_PRICE_LEVELS)
+            .unwrap_or(obook.asks.len());
+        let bid_count = obook
+            .bids
+            .find_price_level(CHECKSUM_PRICE_LEVELS)
+            .unwrap_or(obook.bids.len());
+        let mut buff = self.serializer_buff.borrow_mut();
+
+        buff.clear();
+        for order in obook
+            .asks
+            .iter()
+            .take(ask_count)
+            .chain(obook.bids.iter().take(bid_count))
+        {
+            units::serialize_units(order.limit_price, &mut buff);
+            units::serialize_units(order.order_qty, &mut buff);
+        }
+        crc32fast::hash(buff.as_bytes())
+    }
+}
+
+impl Snapshot {
+    fn try_from(
+        snapshot: wire::Payload<wire::Order>,
+        price_scale: u8,
+        qty_scale: u8,
+    ) -> Result<Snapshot, Box<dyn Error>> {
+        Ok(Snapshot {
+            checksum: snapshot.checksum,
+            timestamp: snapshot.timestamp,
+            bids: snapshot
+                .bids
+                .into_iter()
+                .map(|wire_order| order_book::Order::try_from(wire_order, price_scale, qty_scale))
+                .collect::<Result<Vec<_>, _>>()?,
+            asks: snapshot
+                .asks
+                .into_iter()
+                .map(|wire_order| order_book::Order::try_from(wire_order, price_scale, qty_scale))
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
+}
+
+impl Update {
+    fn try_from(
+        update: wire::Payload<wire::OrderEvent>,
+        price_scale: u8,
+        qty_scale: u8,
+    ) -> Result<Update, Box<dyn Error>> {
+        Ok(Update {
+            checksum: update.checksum,
+            timestamp: update.timestamp,
+            bids: update
+                .bids
+                .into_iter()
+                .map(|wire_update| {
+                    order_book::OrderEvent::try_from(wire_update, price_scale, qty_scale)
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+            asks: update
+                .asks
+                .into_iter()
+                .map(|wire_event| {
+                    order_book::OrderEvent::try_from(wire_event, price_scale, qty_scale)
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
 }
 
 #[cfg(test)]

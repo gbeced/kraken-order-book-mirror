@@ -4,27 +4,6 @@ use rust_decimal::Decimal;
 use std::error::Error;
 use std::ops::Index;
 
-pub struct Order {
-    pub order_id: String,
-    pub limit_price: u64,
-    pub order_qty: u64,
-    pub timestamp: Ts,
-}
-
-pub struct OrderEvent {
-    pub order_id: String,
-    pub limit_price: u64,
-    pub order_qty: u64,
-    pub timestamp: Ts,
-    pub event: wire::EventType,
-}
-
-// Orders are sorted by limit_price (asc/desc) + timestamp(asc).
-pub struct Orders {
-    orders: Vec<Order>,
-    sort_asc: bool,
-}
-
 pub struct OrderBook {
     pub asks: Orders,
     pub bids: Orders,
@@ -33,20 +12,37 @@ pub struct OrderBook {
     qty_scale: u8,
 }
 
-impl OrderEvent {
-    pub fn try_from(
-        wire_update: wire::OrderEvent,
+impl OrderBook {
+    pub fn new(
+        asks: Orders,
+        bids: Orders,
+        timestamp: Ts,
         price_scale: u8,
         qty_scale: u8,
-    ) -> Result<OrderEvent, Box<dyn Error>> {
-        Ok(OrderEvent {
-            order_id: wire_update.order_id,
-            limit_price: units::to_units(wire_update.limit_price, price_scale)?,
-            order_qty: units::to_units(wire_update.order_qty, qty_scale)?,
-            timestamp: wire_update.timestamp,
-            event: wire_update.event,
-        })
+    ) -> OrderBook {
+        OrderBook {
+            asks,
+            bids,
+            timestamp,
+            price_scale,
+            qty_scale,
+        }
     }
+
+    pub fn price_to_decimal(&self, price: u64) -> Decimal {
+        units::to_decimal(price, self.price_scale)
+    }
+
+    pub fn qty_to_decimal(&self, qty: u64) -> Decimal {
+        units::to_decimal(qty, self.qty_scale)
+    }
+}
+
+pub struct Order {
+    pub order_id: String,
+    pub limit_price: u64,
+    pub order_qty: u64,
+    pub timestamp: Ts,
 }
 
 impl Order {
@@ -72,6 +68,36 @@ impl Order {
             timestamp: wire_order.timestamp,
         })
     }
+}
+
+pub struct OrderEvent {
+    pub order_id: String,
+    pub limit_price: u64,
+    pub order_qty: u64,
+    pub timestamp: Ts,
+    pub event: wire::EventType,
+}
+
+impl OrderEvent {
+    pub fn try_from(
+        wire_update: wire::OrderEvent,
+        price_scale: u8,
+        qty_scale: u8,
+    ) -> Result<OrderEvent, Box<dyn Error>> {
+        Ok(OrderEvent {
+            order_id: wire_update.order_id,
+            limit_price: units::to_units(wire_update.limit_price, price_scale)?,
+            order_qty: units::to_units(wire_update.order_qty, qty_scale)?,
+            timestamp: wire_update.timestamp,
+            event: wire_update.event,
+        })
+    }
+}
+
+// Orders are sorted by limit_price (asc/desc) + timestamp(asc).
+pub struct Orders {
+    orders: Vec<Order>,
+    sort_asc: bool,
 }
 
 impl Orders {
@@ -187,6 +213,30 @@ impl Orders {
             self.orders.drain(truncate_pos..);
         }
     }
+
+    pub fn apply_events(&mut self, events: Vec<OrderEvent>,) -> Result<(), Box<dyn Error>> {
+        for event in events {
+            match event.event {
+                // A new order added to the book.
+                wire::EventType::Add => {
+                    self.insert_order(Order::from(event));
+                }
+                // The order has been removed from the book, i.e. full fill or cancel.
+                wire::EventType::Delete => {
+                    if !self.remove_order(&event.order_id, event.limit_price) {
+                        return Err(format!("Order not found {}", event.order_id).into());
+                    }
+                }
+                // The order quantity has been modified, i.e. a fill.
+                wire::EventType::Modify => {
+                    if !self.modify_order(Order::from(event)) {
+                        return Err("Order not found".into());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Index<usize> for Orders {
@@ -194,32 +244,6 @@ impl Index<usize> for Orders {
 
     fn index(&self, index: usize) -> &Self::Output {
         &self.orders[index]
-    }
-}
-
-impl OrderBook {
-    pub fn new(
-        asks: Orders,
-        bids: Orders,
-        timestamp: Ts,
-        price_scale: u8,
-        qty_scale: u8,
-    ) -> OrderBook {
-        OrderBook {
-            asks,
-            bids,
-            timestamp,
-            price_scale,
-            qty_scale,
-        }
-    }
-
-    pub fn price_to_decimal(&self, price: u64) -> Decimal {
-        units::to_decimal(price, self.price_scale)
-    }
-
-    pub fn qty_to_decimal(&self, qty: u64) -> Decimal {
-        units::to_decimal(qty, self.qty_scale)
     }
 }
 
