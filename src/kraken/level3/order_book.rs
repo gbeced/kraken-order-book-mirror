@@ -1,20 +1,8 @@
-use super::units;
+use super::{units, wire};
 use crate::common::ts::Ts;
 use rust_decimal::Decimal;
+use std::error::Error;
 use std::ops::Index;
-
-pub struct Order {
-    pub order_id: String,
-    pub limit_price: u64,
-    pub order_qty: u64,
-    pub timestamp: Ts,
-}
-
-// Orders are sorted by limit_price (asc/desc) + timestamp(asc).
-pub struct Orders {
-    orders: Vec<Order>,
-    sort_asc: bool,
-}
 
 pub struct OrderBook {
     pub asks: Orders,
@@ -24,8 +12,96 @@ pub struct OrderBook {
     qty_scale: u8,
 }
 
+impl OrderBook {
+    pub (super) fn new(
+        asks: Orders,
+        bids: Orders,
+        timestamp: Ts,
+        price_scale: u8,
+        qty_scale: u8,
+    ) -> OrderBook {
+        OrderBook {
+            asks,
+            bids,
+            timestamp,
+            price_scale,
+            qty_scale,
+        }
+    }
+
+    pub fn price_to_decimal(&self, price: u64) -> Decimal {
+        units::to_decimal(price, self.price_scale)
+    }
+
+    pub fn qty_to_decimal(&self, qty: u64) -> Decimal {
+        units::to_decimal(qty, self.qty_scale)
+    }
+}
+
+pub struct Order {
+    pub order_id: String,
+    pub limit_price: u64,
+    pub order_qty: u64,
+    pub timestamp: Ts,
+}
+
+impl Order {
+    pub (super) fn from_event(event: OrderEvent) -> Order {
+        // Not using From trait because according to the docs the general expectation is that the conversion is lossless.
+        Order {
+            order_id: event.order_id,
+            limit_price: event.limit_price,
+            order_qty: event.order_qty,
+            timestamp: event.timestamp,
+        }
+    }
+
+    pub (super) fn try_from_wire(
+        wire_order: wire::Order,
+        price_scale: u8,
+        qty_scale: u8,
+    ) -> Result<Order, Box<dyn Error>> {
+        Ok(Order {
+            order_id: wire_order.order_id,
+            limit_price: units::to_units(wire_order.limit_price, price_scale)?,
+            order_qty: units::to_units(wire_order.order_qty, qty_scale)?,
+            timestamp: wire_order.timestamp,
+        })
+    }
+}
+
+pub (super) struct OrderEvent {
+    pub order_id: String,
+    pub limit_price: u64,
+    pub order_qty: u64,
+    pub timestamp: Ts,
+    pub event: wire::EventType,
+}
+
+impl OrderEvent {
+    pub (super) fn try_from_wire(
+        wire_update: wire::OrderEvent,
+        price_scale: u8,
+        qty_scale: u8,
+    ) -> Result<OrderEvent, Box<dyn Error>> {
+        Ok(OrderEvent {
+            order_id: wire_update.order_id,
+            limit_price: units::to_units(wire_update.limit_price, price_scale)?,
+            order_qty: units::to_units(wire_update.order_qty, qty_scale)?,
+            timestamp: wire_update.timestamp,
+            event: wire_update.event,
+        })
+    }
+}
+
+// Orders are sorted by limit_price (asc/desc) + timestamp(asc).
+pub struct Orders {
+    orders: Vec<Order>,
+    sort_asc: bool,
+}
+
 impl Orders {
-    pub fn new(orders: Vec<Order>, sort_asc: bool) -> Orders {
+    pub (super) fn new(orders: Vec<Order>, sort_asc: bool) -> Orders {
         Orders { orders, sort_asc }
     }
 
@@ -41,7 +117,7 @@ impl Orders {
         self.orders.iter()
     }
 
-    pub fn insert_order(&mut self, order: Order) {
+    pub (super) fn insert_order(&mut self, order: Order) {
         let idx = self.orders.partition_point(|o| match self.sort_asc {
             true => {
                 o.limit_price < order.limit_price
@@ -55,7 +131,7 @@ impl Orders {
         self.orders.insert(idx, order);
     }
 
-    pub fn remove_order(&mut self, order_id: &str, limit_price: u64) -> bool {
+    pub (super) fn remove_order(&mut self, order_id: &str, limit_price: u64) -> bool {
         if let Some((idx, _)) = self.find_order(order_id, limit_price) {
             self.orders.remove(idx);
             true
@@ -64,7 +140,7 @@ impl Orders {
         }
     }
 
-    pub fn find_order<'a>(
+    pub (super) fn find_order<'a>(
         &'a mut self,
         order_id: &str,
         limit_price: u64,
@@ -86,26 +162,21 @@ impl Orders {
         None
     }
 
-    pub fn modify_order(&mut self, order: Order) -> bool {
-        if let Some((mut idx, prev_order)) = self.find_order(&order.order_id, order.limit_price) {
-            if prev_order.timestamp == order.timestamp {
-                // Update the qty in place.
-                prev_order.order_qty = order.order_qty;
-            } else {
-                // Remove the order and continue doing a linear search for the insertion point within the price level, or
-                // at the end of it.
-                assert!(order.timestamp > prev_order.timestamp);
-                self.orders.remove(idx);
-                for existing in self.orders.iter().skip(idx) {
-                    if order.timestamp < existing.timestamp
-                        || existing.limit_price != order.limit_price
-                    {
-                        break;
-                    }
-                    idx += 1;
-                }
-
-                self.orders.insert(idx, order);
+    pub (super) fn modify_order(&mut self, order: Order) -> bool {
+        if let Some((idx, prev_order)) = self.find_order(&order.order_id, order.limit_price) {
+            prev_order.order_qty = order.order_qty;
+            if prev_order.timestamp != order.timestamp {
+                // The order has to be relocated.
+                prev_order.timestamp = order.timestamp;
+                // Continue doing a linear search for the destination point within the price level, or at the end of it.
+                let end = match self.orders[idx + 1..].iter().enumerate().find(|(_, o)| {
+                    order.timestamp < o.timestamp || o.limit_price != order.limit_price
+                }) {
+                    Some((pos, _)) => idx + 1 + pos,
+                    None => self.orders.len(),
+                };
+                // Move the order at the end.
+                self.orders[idx..end].rotate_left(1);
             }
             true
         } else {
@@ -136,11 +207,35 @@ impl Orders {
         None
     }
 
-    pub fn truncate_price_level(&mut self, max_levels: usize) {
+    pub (super) fn truncate_price_level(&mut self, max_levels: usize) {
         // Truncates orders leaving only the first max_levels.
         if let Some(truncate_pos) = self.find_price_level(max_levels) {
             self.orders.drain(truncate_pos..);
         }
+    }
+
+    pub (super) fn apply_events(&mut self, events: Vec<OrderEvent>) -> Result<(), Box<dyn Error>> {
+        for event in events {
+            match event.event {
+                // A new order added to the book.
+                wire::EventType::Add => {
+                    self.insert_order(Order::from_event(event));
+                }
+                // The order has been removed from the book, i.e. full fill or cancel.
+                wire::EventType::Delete => {
+                    if !self.remove_order(&event.order_id, event.limit_price) {
+                        return Err(format!("Order not found {}", event.order_id).into());
+                    }
+                }
+                // The order quantity has been modified, i.e. a fill.
+                wire::EventType::Modify => {
+                    if !self.modify_order(Order::from_event(event)) {
+                        return Err("Order not found".into());
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -149,32 +244,6 @@ impl Index<usize> for Orders {
 
     fn index(&self, index: usize) -> &Self::Output {
         &self.orders[index]
-    }
-}
-
-impl OrderBook {
-    pub fn new(
-        asks: Orders,
-        bids: Orders,
-        timestamp: Ts,
-        price_scale: u8,
-        qty_scale: u8,
-    ) -> OrderBook {
-        OrderBook {
-            asks,
-            bids,
-            timestamp,
-            price_scale,
-            qty_scale,
-        }
-    }
-
-    pub fn price_to_decimal(&self, price: u64) -> Decimal {
-        units::to_decimal(price, self.price_scale)
-    }
-
-    pub fn qty_to_decimal(&self, qty: u64) -> Decimal {
-        units::to_decimal(qty, self.qty_scale)
     }
 }
 

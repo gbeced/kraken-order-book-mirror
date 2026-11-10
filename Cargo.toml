@@ -2,6 +2,11 @@
 name = "rust-order-book-mirror"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.99"
+description = "Mirrors Kraken's level3 (order-by-order) book over WebSocket v2 and shows it in a terminal dashboard"
+license = "Apache-2.0"
+repository = "https://github.com/gbeced/kraken-order-book-mirror"
+publish = false
 
 [dependencies]
 base64 = "0.23.1"
@@ -19,11 +24,10 @@ serde_json = { version = "1.0.151", features = ["arbitrary_precision"] }
 sha2 = "0.11"
 tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
-tungstenite = { version = "0.30", features = ["native-tls"] }
-uuid = { version = "1.27.0", features = ["v4"] }
 
 [dev-dependencies]
 divan = { package = "codspeed-divan-compat", version = "5.0.3" }
+uuid = { version = "1.27.0", features = ["v4"] }
 
 [[bench]]
 name = "to_units"

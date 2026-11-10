@@ -6,12 +6,12 @@ use serde::{Deserialize, Deserializer};
 // https://docs.kraken.com/exchange/api-reference/spot-websocket-v2/level3
 
 #[derive(Deserialize)]
-pub struct Envelope<T> {
+pub (super) struct Envelope<T> {
     pub data: Vec<T>,
 }
 
 #[derive(Deserialize)]
-pub struct Payload<T> {
+pub (super) struct Payload<T> {
     // symbol: String,
     pub checksum: u32,
     #[serde(deserialize_with = "deserialize_ts")]
@@ -21,7 +21,7 @@ pub struct Payload<T> {
 }
 
 #[derive(Deserialize)]
-pub struct Order {
+pub (super) struct Order {
     pub order_id: String,
     #[serde(with = "rust_decimal::serde::arbitrary_precision")]
     pub limit_price: Decimal,
@@ -33,14 +33,14 @@ pub struct Order {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum EventType {
+pub (super) enum EventType {
     Add,
     Modify,
     Delete,
 }
 
 #[derive(Deserialize)]
-pub struct OrderEvent {
+pub (super) struct OrderEvent {
     pub order_id: String,
     #[serde(with = "rust_decimal::serde::arbitrary_precision")]
     pub limit_price: Decimal,

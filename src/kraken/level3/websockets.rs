@@ -3,9 +3,13 @@ use crate::kraken::rest_client;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
 use std::error::Error;
+use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio::time::timeout;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
-use tungstenite::client::IntoClientRequest;
+
+const READ_MSG_TIMEOUT: Duration = Duration::from_millis(5 * 1000);
 
 // Faster, but error prone.
 // pub fn is_channel_level3(msg: &str) -> bool {
@@ -21,7 +25,7 @@ fn is_channel_level3(msg: &str) -> bool {
         == Some("level3")
 }
 
-fn extract_error<'a>(msg: &'a str) -> Option<&'a str> {
+fn extract_error(msg: &str) -> Option<&str> {
     json_utils::JsonScanner::new(msg.as_bytes()).top_level_plain_string(b"error")
 }
 
@@ -55,13 +59,12 @@ pub async fn connect_and_dispatch_level3(
         .await?;
 
     // Read loop.
-    while let Some(msg) = read.next().await {
+    while let Ok(Some(msg)) = timeout(READ_MSG_TIMEOUT, read.next()).await {
         match msg {
             Ok(Message::Text(text)) => {
                 if is_channel_level3(text.as_str()) {
                     sender.send(text.to_string())?;
-                }
-                else if let Some(error) = extract_error(text.as_str()) {
+                } else if let Some(error) = extract_error(text.as_str()) {
                     return Err(error.into());
                 }
             }
@@ -125,21 +128,18 @@ mod tests {
 
     #[test]
     fn error_frames() {
-        let positive_samples = [
-            r#"{"error":"Subscription depth not supported","method":"subscribe"}"#,
-        ];
+        let positive_samples =
+            [r#"{"error":"Subscription depth not supported","method":"subscribe"}"#];
         for sample in positive_samples {
-            assert_eq!(extract_error(sample).unwrap(), "Subscription depth not supported");
+            assert_eq!(
+                extract_error(sample).unwrap(),
+                "Subscription depth not supported"
+            );
         }
 
-        let negative_samples = [
-            r#"{"channel":"status","type":"update","data":[]}"#,
-        ];
+        let negative_samples = [r#"{"channel":"status","type":"update","data":[]}"#];
         for sample in negative_samples {
             assert!(extract_error(sample).is_none());
         }
-
     }
-
-
 }

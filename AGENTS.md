@@ -2,7 +2,7 @@
 
 Tokio binary that authenticates to Kraken, subscribes to the WebSocket v2 `level3` channel for a pair given on the command line, and maintains a local order-by-order book. `cmds::dashboard` applies each frame. `tui::Screen` paints an order-book dashboard (ladder, imbalance, depth, impact, L3 order stats, and feed health), with compact cards on small terminals. The book stays in memory for the process lifetime. The binary does not send orders.
 
-One package, edition 2024. `Cargo.toml` sets no `rust-version`. Edition 2024 needs rustc 1.85+, but `units.rs` uses `std::fmt::NumBuffer` / `format_into`, which needs a much newer stable toolchain. Verified with rustc 1.99.1. The binary is the product. A library target exists so the benches, the integration tests, and `main.rs` can call the crate. Not a monorepo.
+One package, edition 2024, `rust-version = "1.99"` in `Cargo.toml` (`units.rs` uses `std::fmt::NumBuffer` / `format_into`, which needs a recent stable toolchain). There is no `rust-toolchain.toml`. Verified with rustc 1.99.1. Licensed Apache-2.0 (`LICENSE`, `NOTICE`); `publish = false`. The binary is the product. A library target exists so the benches, the integration tests, and `main.rs` can call the crate. Not a monorepo.
 
 ## Layout
 
@@ -20,9 +20,9 @@ One package, edition 2024. `Cargo.toml` sets no `rust-version`. Edition 2024 nee
 - `src/kraken/sign.rs` — REST HMAC (`get_signature`). Private module.
 - `src/kraken/level3/mod.rs` — `pub mod mirror; pub mod order_book; pub mod units; pub mod websockets; mod wire;`
 - `src/kraken/level3/websockets.rs` — connect, subscribe, forward `level3` text frames. Holds the private `is_channel_level3` and `extract_error`, both built on `JsonScanner`.
-- `src/kraken/level3/wire.rs` — private serde types: `Envelope`, `Payload<T>`, `WireOrder`, `WireOrderEvent`, `EventType`.
+- `src/kraken/level3/wire.rs` — private serde types: `Envelope`, `Payload<T>`, `Order`, `OrderEvent`, `EventType`. These share names with the unit types in `order_book.rs`; refer to them as `wire::Order` / `wire::OrderEvent`.
 - `src/kraken/level3/units.rs` — `to_units`, `to_decimal`, `serialize_units`.
-- `src/kraken/level3/order_book.rs` — `Order`, `Orders` (sorted vec), `OrderBook`.
+- `src/kraken/level3/order_book.rs` — `Order`, `OrderEvent` (unit-converted update event), `Orders` (sorted vec), `OrderBook`. Also holds the per-order wire → units conversions (`Order::try_from_wire`, `OrderEvent::try_from_wire`) and `Order::from_event`.
 - `src/kraken/level3/mirror.rs` — `OrderBookMirror` state machine, apply, checksum.
 - `benches/mirror.rs` — CodSpeed/Divan harness. Sixteen `on_update` cases apply one ask-side update frame to a 1000-level snapshot (levels 2 ticks apart, orders per level cycled from `LEVEL_SIZES`). The patterns come from `btc_usd_stream.log`: `add_new_level`, `add_join`, `cancel` (delete that leaves the level non-empty), `fill` (in-place modify at the touch), and `clear_backfill_1` / `_4` (a delete clears a size-1 level, then 1 or 4 adds at the price past the deepest level). Each runs at begin / middle / end, except `fill`, which runs at begin only. Checksums are stamped from a trial apply. `replay_stream` applies every update in `btc_usd_stream.log` at depth 10. Snapshot applies are outside the timer.
 - `benches/to_units.rs`, `benches/serialize_units.rs` — Divan micro-benches for `units::to_units` and `units::serialize_units`. All three are `[[bench]]` entries with `harness = false`.
@@ -30,9 +30,10 @@ One package, edition 2024. `Cargo.toml` sets no `rust-version`. Edition 2024 nee
 - `tests/data/` — offline fixtures: `level3_snapshot.json`, `level3_update_1.json`, `level3_update_2.json`, `btc_usd_stream.log`
 - `docs/ui-guide.md` — user guide for the dashboard: every panel, how each number is computed, layout modes, keys. Keep it in sync with `src/tui/` changes (panels, thresholds, keys, colors).
 - `env.example` — empty `KRAKEN_API_KEY` / `KRAKEN_API_SECRET` template.
+- `LICENSE` / `NOTICE` — Apache-2.0.
 - `Cargo.toml` / `Cargo.lock` — crate `rust-order-book-mirror`
 
-There is no `rustfmt.toml` / `clippy.toml` / `rust-toolchain.toml`. Unit tests live in `#[cfg(test)]` modules in `cmds::bench`, `kraken::sign`, `kraken::level3::{units, order_book, mirror, websockets}`, and `tui::{metrics, format, mod, render}`. CI is `.github/workflows/codspeed.yml` only: `cargo codspeed build` then CPU simulation of the Divan benches, triggered on `workflow_dispatch`, push to `master`, and pull requests. `README.md` documents the live client and the bench command, but it is stale (see Known drift).
+There is no `rustfmt.toml` / `clippy.toml` / `rust-toolchain.toml`. The toolchain floor is `rust-version` in `Cargo.toml`. Unit tests live in `#[cfg(test)]` modules in `cmds::bench`, `kraken::sign`, `kraken::level3::{units, order_book, mirror, websockets}`, and `tui::{metrics, format, mod, render}`. CI is `.github/workflows/codspeed.yml` only: `cargo codspeed build` then CPU simulation of the Divan benches, triggered on `workflow_dispatch`, push to `master`, and pull requests. `README.md` documents the live client and the bench command, but it is stale (see Known drift).
 
 `sign` is private to `kraken`; `rest_client` calls it as `super::sign`. `wire` is private to `level3`. `is_channel_level3` and `extract_error` are private to `level3/websockets.rs`. `common` and `config` are declared only in `lib.rs`. A compiler hint to add a module in `main.rs` is wrong, since `main.rs` uses the library crate.
 
@@ -55,8 +56,8 @@ Never commit `.env`, or secrets.
 | `cargo check` | Typecheck |
 | `cargo build` | Debug build |
 | `cargo test` | Unit tests plus `tests/mirror.rs`. No network |
-| `rustfmt --edition 2024 FILE...` | Format only the files you touched. `cargo fmt` would also reformat `src/cmds/dump.rs` and `src/kraken/level3/websockets.rs`, which are not rustfmt-clean |
-| `cargo clippy --all-targets` | Lints, no project config. The baseline already has warnings (mostly `mirror.rs`, `units.rs`, `tests/mirror.rs`). Add no new ones; don't fix existing ones unless asked |
+| `rustfmt --edition 2024 FILE...` | Format only the files you touched. `cargo fmt` would also reformat `src/kraken/level3/mirror.rs`, `src/kraken/level3/order_book.rs`, and `src/kraken/level3/websockets.rs`, which are not rustfmt-clean |
+| `cargo clippy --all-targets` | Lints, no project config. The baseline already has warnings (mostly `mirror.rs`, plus `units.rs`, `tests/mirror.rs`, and one each in `tui::{metrics, mod, render}`). Add no new ones; don't fix existing ones unless asked |
 | `cargo run -- dashboard BTC/USD [DEPTH]` | Long-running **live** client. Default depth `1000` |
 | `cargo run -- dump BTC/USD [DEPTH] > FILE` | Long-running **live** raw frame capture. Default depth `1000` |
 | `cargo run --release -- bench FILE PAIR [DEPTH]` | Replay of `FILE`. Default depth `1000`. **Needs network** for the pair lookup |
@@ -103,14 +104,14 @@ References:
 
 `on_message` deserializes the frame as `UpdateMsg` first, then as `SnapshotMsg`. `Order` has no `event` field, so an update payload also deserializes as a snapshot; the update attempt has to stay first. `channel` and `type` are not struct fields. A frame that matches neither returns `"Unexpected message"` and leaves the state unchanged. `data` is a `Vec` of one book per subscribed symbol. Fixtures are full frames (`channel` / `type` / `data`), including compact one-line frames in `btc_usd_stream.log`.
 
-`Order.limit_price` and `Order.order_qty` are public `u64` base-unit counts. `Order` does not convert to `Decimal`. `OrderBook::price_to_decimal` and `OrderBook::qty_to_decimal` do, using the `u8` scales stored on that book (`units::to_decimal`). Wire JSON still parses with `rust_decimal` arbitrary precision into private `wire::WireOrder` / `wire::WireOrderEvent` values. `process_snapshot` and `process_update` convert those to units with `context.price_scale` and `context.qty_scale` (`Snapshot::try_from_wire`, `Update::try_from_wire`) before the state machine sees them. A negative value, a value that is not a multiple of the increment, or a count that does not fit in `u64` fails that conversion and leaves the state unchanged. Timestamps are `common::ts::Ts` (i64 nanoseconds; Kraken sends 9 fractional digits, so microseconds would tie distinct events). `wire` deserializes them as `DateTime<Utc>` and converts with `deserialize_ts`; an out-of-range timestamp fails deserialization. `cmds::dashboard` passes `OrderBook.timestamp` to `Screen::draw` as a `Ts`, and `tui` computes ages from `Ts::now()` without chrono. Comparisons, `partition_point`, and `find_price_level` use the `u64` fields. Do not put `Decimal` back on `Order`, and do not hardcode the scales in `level3`. The scales come from the pair lookup. The fixtures, the benches, and `tests/mirror.rs` use `1` and `8` because they are BTC/USD (tick `0.1`, step `1e-8`).
+`Order.limit_price` and `Order.order_qty` are public `u64` base-unit counts. `Order` does not convert to `Decimal`. `OrderBook::price_to_decimal` and `OrderBook::qty_to_decimal` do, using the `u8` scales stored on that book (`units::to_decimal`). Wire JSON still parses with `rust_decimal` arbitrary precision into private `wire::Order` / `wire::OrderEvent` values. `process_snapshot` and `process_update` convert those to units with `context.price_scale` and `context.qty_scale` (`Snapshot::try_from_wire`, `Update::try_from_wire` in `mirror.rs`, which call the per-order conversions in `order_book.rs`) before the state machine sees them. A negative value, a value that is not a multiple of the increment, or a count that does not fit in `u64` fails that conversion and leaves the state unchanged. Timestamps are `common::ts::Ts` (i64 nanoseconds; Kraken sends 9 fractional digits, so microseconds would tie distinct events). `wire` deserializes them as `DateTime<Utc>` and converts with `deserialize_ts`; an out-of-range timestamp fails deserialization. `cmds::dashboard` passes `OrderBook.timestamp` to `Screen::draw` as a `Ts`, and `tui` computes ages from `Ts::now()` without chrono. Comparisons, `partition_point`, and `find_price_level` use the `u64` fields. Do not put `Decimal` back on `Order`, and do not hardcode the scales in `level3`. The scales come from the pair lookup. The fixtures, the benches, and `tests/mirror.rs` use `1` and `8` because they are BTC/USD (tick `0.1`, step `1e-8`).
 
 Side order, which the CRC queue depends on:
 
 - Asks: `limit_price` ascending, then `timestamp` ascending.
 - Bids: `limit_price` descending, then `timestamp` ascending.
 - `insert_order` uses `partition_point` with a strict `<` on timestamp, so a later timestamp appends after earlier orders at that price.
-- `remove_order` and `modify_order` go through `find_order`, which finds the price level with `partition_point`, then scans that level for `order_id`. `modify_order` with the same timestamp writes `order_qty` in place. A later timestamp removes and reinserts inside that price level. An earlier timestamp hits `assert!`. On the wire, a price change is `delete` then `add`.
+- `remove_order` and `modify_order` go through `find_order`, which finds the price level with `partition_point`, then scans that level for `order_id`. `modify_order` with the same timestamp writes `order_qty` in place. A later timestamp updates `order_qty` and `timestamp`, then rotates the order forward inside that price level, past orders with an earlier or equal timestamp. An earlier timestamp is not checked: the fields are updated and the order stays where it is. On the wire, a price change is `delete` then `add`.
 
 After each side's events, `truncate_price_level` cuts that side to `max_depth` distinct price levels (asks, then bids). Every order at the boundary price stays. Kraken omits `delete` for levels that fall out of the top N. Skipping the truncate duplicates `order_id`s when those levels return. Depth `0` drops every order.
 
@@ -118,7 +119,7 @@ After each side's events, `truncate_price_level` cuts that side to `max_depth` d
 
 The checksum hashes every order on the top 10 price levels per side (asks, then bids), ignoring levels past the 10th price and ignoring the subscribed depth. Each stored count is written as its decimal digits (`units::serialize_units`), a zero count writes nothing, then CRC32 (`crc32fast`). When the wire scale matches the tick and the step, those digits are the Kraken checksum string (decimal point and leading zeros removed, trailing zeros kept). Subscribed depth must stay at least 10 so the local book can contain the levels Kraken hashes. Building the book copies asks, bids, and timestamp and drops `Payload.checksum`: the snapshot checksum is not verified, and the snapshot is not truncated to `max_depth` (only updates truncate). Updates compare a fresh CRC against `update.checksum`. A checksum or apply failure sets `Invalid`.
 
-`Snapshot` is a type alias for `Payload<Order>`. An impl on that alias does not apply to `Payload<OrderEvent>` (`Update`). JSON frames deserialize as `Envelope<Payload<WireOrder>>` and `Envelope<Payload<WireOrderEvent>>`, then convert into those unit payloads. `Envelope<T>` is the `{ data: [...] }` frame. The maintained book is `OrderBook` (asks, bids, timestamp, price scale, quantity scale).
+`Snapshot` is a private type alias in `mirror.rs` for `wire::Payload<order_book::Order>`, and `Update` for `wire::Payload<order_book::OrderEvent>`. An impl on one alias does not apply to the other. JSON frames deserialize as `Envelope<Payload<wire::Order>>` and `Envelope<Payload<wire::OrderEvent>>`, then convert into those unit payloads. `Envelope<T>` is the `{ data: [...] }` frame. The maintained book is `OrderBook` (asks, bids, timestamp, price scale, quantity scale).
 
 ## Conventions
 
