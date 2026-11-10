@@ -39,7 +39,7 @@ impl OrderBook {
 }
 
 pub struct Order {
-    pub order_id: String,
+    pub order_id: wire::OrderId,
     pub limit_price: u64,
     pub order_qty: u64,
     pub timestamp: Ts,
@@ -71,7 +71,7 @@ impl Order {
 }
 
 pub (super) struct OrderEvent {
-    pub order_id: String,
+    pub order_id: wire::OrderId,
     pub limit_price: u64,
     pub order_qty: u64,
     pub timestamp: Ts,
@@ -131,7 +131,7 @@ impl Orders {
         self.orders.insert(idx, order);
     }
 
-    pub (super) fn remove_order(&mut self, order_id: &str, limit_price: u64) -> bool {
+    pub (super) fn remove_order(&mut self, order_id: &wire::OrderId, limit_price: u64) -> bool {
         if let Some((idx, _)) = self.find_order(order_id, limit_price) {
             self.orders.remove(idx);
             true
@@ -142,7 +142,7 @@ impl Orders {
 
     pub (super) fn find_order<'a>(
         &'a mut self,
-        order_id: &str,
+        order_id: &wire::OrderId,
         limit_price: u64,
     ) -> Option<(usize, &'a mut Order)> {
         // Orders are sorted by limit_price (asc/desc) + timestamp(asc).
@@ -153,7 +153,7 @@ impl Orders {
         });
         // Then we do a linear search within the price level.
         for (idx, order) in (idx..).zip(self.orders.iter_mut().skip(idx)) {
-            if order.order_id == order_id {
+            if order.order_id == *order_id {
                 return Some((idx, order));
             } else if order.limit_price != limit_price {
                 return None;
@@ -224,7 +224,10 @@ impl Orders {
                 // The order has been removed from the book, i.e. full fill or cancel.
                 wire::EventType::Delete => {
                     if !self.remove_order(&event.order_id, event.limit_price) {
-                        return Err(format!("Order not found {}", event.order_id).into());
+                        return Err(format!(
+                            "Order not found {}",
+                            std::str::from_utf8(&event.order_id)?
+                        ).into());
                     }
                 }
                 // The order quantity has been modified, i.e. a fill.
@@ -258,9 +261,17 @@ mod tests {
     const PRICE_SCALE: u8 = 1;
     const QTY_SCALE: u8 = 8;
 
+    fn random_order_id() -> wire::OrderId {
+        // OrderId is a fixed-size byte array, so take the first bytes of a random hex string.
+        let hex = Uuid::new_v4().simple().to_string();
+        hex.as_bytes()[..size_of::<wire::OrderId>()]
+            .try_into()
+            .expect("order id length")
+    }
+
     fn build_order(limit_price: Decimal, price_scale: u8, qty_scale: u8) -> Order {
         Order {
-            order_id: Uuid::new_v4().simple().to_string(),
+            order_id: random_order_id(),
             limit_price: to_units(limit_price, price_scale).expect("price units"),
             order_qty: to_units(Decimal::from(1), qty_scale).expect("qty units"),
             timestamp: Ts::try_from(chrono::Utc::now()).unwrap(),
