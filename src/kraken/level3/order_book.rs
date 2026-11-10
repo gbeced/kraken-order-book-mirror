@@ -13,7 +13,7 @@ pub struct OrderBook {
 }
 
 impl OrderBook {
-    pub fn new(
+    pub (super) fn new(
         asks: Orders,
         bids: Orders,
         timestamp: Ts,
@@ -46,7 +46,7 @@ pub struct Order {
 }
 
 impl Order {
-    pub fn from_event(event: OrderEvent) -> Order {
+    pub (super) fn from_event(event: OrderEvent) -> Order {
         // Not using From trait because according to the docs the general expectation is that the conversion is lossless.
         Order {
             order_id: event.order_id,
@@ -56,7 +56,7 @@ impl Order {
         }
     }
 
-    pub fn try_from_wire(
+    pub (super) fn try_from_wire(
         wire_order: wire::Order,
         price_scale: u8,
         qty_scale: u8,
@@ -70,7 +70,7 @@ impl Order {
     }
 }
 
-pub struct OrderEvent {
+pub (super) struct OrderEvent {
     pub order_id: String,
     pub limit_price: u64,
     pub order_qty: u64,
@@ -79,7 +79,7 @@ pub struct OrderEvent {
 }
 
 impl OrderEvent {
-    pub fn try_from_wire(
+    pub (super) fn try_from_wire(
         wire_update: wire::OrderEvent,
         price_scale: u8,
         qty_scale: u8,
@@ -101,7 +101,7 @@ pub struct Orders {
 }
 
 impl Orders {
-    pub fn new(orders: Vec<Order>, sort_asc: bool) -> Orders {
+    pub (super) fn new(orders: Vec<Order>, sort_asc: bool) -> Orders {
         Orders { orders, sort_asc }
     }
 
@@ -117,7 +117,7 @@ impl Orders {
         self.orders.iter()
     }
 
-    pub fn insert_order(&mut self, order: Order) {
+    pub (super) fn insert_order(&mut self, order: Order) {
         let idx = self.orders.partition_point(|o| match self.sort_asc {
             true => {
                 o.limit_price < order.limit_price
@@ -131,7 +131,7 @@ impl Orders {
         self.orders.insert(idx, order);
     }
 
-    pub fn remove_order(&mut self, order_id: &str, limit_price: u64) -> bool {
+    pub (super) fn remove_order(&mut self, order_id: &str, limit_price: u64) -> bool {
         if let Some((idx, _)) = self.find_order(order_id, limit_price) {
             self.orders.remove(idx);
             true
@@ -140,7 +140,7 @@ impl Orders {
         }
     }
 
-    pub fn find_order<'a>(
+    pub (super) fn find_order<'a>(
         &'a mut self,
         order_id: &str,
         limit_price: u64,
@@ -162,7 +162,7 @@ impl Orders {
         None
     }
 
-    pub fn modify_order(&mut self, order: Order) -> bool {
+    pub (super) fn modify_order(&mut self, order: Order) -> bool {
         if let Some((idx, prev_order)) = self.find_order(&order.order_id, order.limit_price) {
             prev_order.order_qty = order.order_qty;
             if prev_order.timestamp != order.timestamp {
@@ -207,14 +207,14 @@ impl Orders {
         None
     }
 
-    pub fn truncate_price_level(&mut self, max_levels: usize) {
+    pub (super) fn truncate_price_level(&mut self, max_levels: usize) {
         // Truncates orders leaving only the first max_levels.
         if let Some(truncate_pos) = self.find_price_level(max_levels) {
             self.orders.drain(truncate_pos..);
         }
     }
 
-    pub fn apply_events(&mut self, events: Vec<OrderEvent>) -> Result<(), Box<dyn Error>> {
+    pub (super) fn apply_events(&mut self, events: Vec<OrderEvent>) -> Result<(), Box<dyn Error>> {
         for event in events {
             match event.event {
                 // A new order added to the book.
