@@ -11,7 +11,7 @@ async fn obook_reader(
     api_secret: String,
     channel: String,
     depth: usize,
-    sender: mpsc::UnboundedSender<String>,
+    sender: mpsc::UnboundedSender<websockets::Utf8Bytes>,
 ) -> Result<(), String> {
     websockets::connect_and_dispatch_level3(&api_key, &api_secret, &channel, depth, sender)
         .await
@@ -23,7 +23,7 @@ async fn obook_updater(
     depth: usize,
     price_scale: u8,
     qty_scale: u8,
-    mut receiver: mpsc::UnboundedReceiver<String>,
+    mut receiver: mpsc::UnboundedReceiver<websockets::Utf8Bytes>,
 ) -> Result<(), String> {
     let mut mirror = mirror::OrderBookMirror::new(depth, price_scale, qty_scale);
     let mut screen = tui::Screen::new()?;
@@ -90,7 +90,7 @@ pub async fn run(pair: String, depth: usize) -> Result<(), Box<dyn Error>> {
     let (api_key, api_secret) = config::get_credentials()?;
     let pair_info = rest_client::get_pair_info(&pair).await?;
 
-    let (sender, receiver) = mpsc::unbounded_channel::<String>();
+    let (sender, receiver) = mpsc::unbounded_channel::<websockets::Utf8Bytes>();
     let mut producer = tokio::spawn(obook_reader(
         api_key,
         api_secret,
