@@ -3,9 +3,13 @@ use crate::kraken::rest_client;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
 use std::error::Error;
+use std::time::Duration;
 use tokio::sync::mpsc;
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::{connect_async, tungstenite::Message};
+
+const READ_MSG_TIMEOUT: Duration = Duration::from_millis(5 * 1000);
 
 // Faster, but error prone.
 // pub fn is_channel_level3(msg: &str) -> bool {
@@ -55,7 +59,7 @@ pub async fn connect_and_dispatch_level3(
         .await?;
 
     // Read loop.
-    while let Some(msg) = read.next().await {
+    while let Ok(Some(msg)) = timeout(READ_MSG_TIMEOUT, read.next()).await {
         match msg {
             Ok(Message::Text(text)) => {
                 if is_channel_level3(text.as_str()) {
