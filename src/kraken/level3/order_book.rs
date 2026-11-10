@@ -214,7 +214,7 @@ impl Orders {
         }
     }
 
-    pub fn apply_events(&mut self, events: Vec<OrderEvent>,) -> Result<(), Box<dyn Error>> {
+    pub fn apply_events(&mut self, events: Vec<OrderEvent>) -> Result<(), Box<dyn Error>> {
         for event in events {
             match event.event {
                 // A new order added to the book.
