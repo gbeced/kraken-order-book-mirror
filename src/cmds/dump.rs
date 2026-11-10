@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 pub async fn run(pair: String, depth: usize) -> Result<(), Box<dyn Error>> {
     let (api_key, api_secret) = config::get_credentials()?;
 
-    let (sender, mut receiver) = mpsc::unbounded_channel::<String>();
+    let (sender, mut receiver) = mpsc::unbounded_channel::<websockets::Utf8Bytes>();
     let producer = tokio::spawn(async move {
         websockets::connect_and_dispatch_level3(&api_key, &api_secret, &pair, depth, sender)
             .await

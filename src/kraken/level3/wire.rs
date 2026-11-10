@@ -5,15 +5,15 @@ use serde::{Deserialize, Deserializer};
 
 // https://docs.kraken.com/exchange/api-reference/spot-websocket-v2/level3
 
-pub (super) type OrderId = [u8; 19];
+pub(super) type OrderId = [u8; 19];
 
 #[derive(Deserialize)]
-pub (super) struct Envelope<T> {
+pub(super) struct Envelope<T> {
     pub data: Vec<T>,
 }
 
 #[derive(Deserialize)]
-pub (super) struct Payload<T> {
+pub(super) struct Payload<T> {
     // symbol: String,
     pub checksum: u32,
     #[serde(deserialize_with = "deserialize_ts")]
@@ -23,7 +23,7 @@ pub (super) struct Payload<T> {
 }
 
 #[derive(Deserialize)]
-pub (super) struct Order {
+pub(super) struct Order {
     #[serde(deserialize_with = "deserialize_order_id")]
     pub order_id: OrderId,
     #[serde(with = "rust_decimal::serde::arbitrary_precision")]
@@ -36,14 +36,14 @@ pub (super) struct Order {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub (super) enum EventType {
+pub(super) enum EventType {
     Add,
     Modify,
     Delete,
 }
 
 #[derive(Deserialize)]
-pub (super) struct OrderEvent {
+pub(super) struct OrderEvent {
     #[serde(deserialize_with = "deserialize_order_id")]
     pub order_id: OrderId,
     #[serde(with = "rust_decimal::serde::arbitrary_precision")]
@@ -64,9 +64,11 @@ fn deserialize_order_id<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Or
     let s = <&str>::deserialize(deserializer)?;
 
     if s.len() > size_of::<OrderId>() {
-        Err(serde::de::Error::invalid_length(s.len(), &"a 19-byte order id"))
-    }
-    else {
+        Err(serde::de::Error::invalid_length(
+            s.len(),
+            &"a 19-byte order id",
+        ))
+    } else {
         let mut ret: OrderId = [0; _];
         let n = s.len().min(ret.len());
         ret[..n].copy_from_slice(&s.as_bytes()[..n]);

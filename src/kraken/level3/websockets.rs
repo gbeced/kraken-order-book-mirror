@@ -9,6 +9,7 @@ use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
+pub type Utf8Bytes = tokio_tungstenite::tungstenite::protocol::frame::Utf8Bytes;
 const READ_MSG_TIMEOUT: Duration = Duration::from_millis(5 * 1000);
 
 // Faster, but error prone.
@@ -34,7 +35,7 @@ pub async fn connect_and_dispatch_level3(
     api_secret: &str,
     channel: &str,
     depth: usize,
-    sender: mpsc::UnboundedSender<String>,
+    sender: mpsc::UnboundedSender<Utf8Bytes>,
 ) -> Result<(), Box<dyn Error>> {
     let token = rest_client::get_websocket_auth_token(api_key, api_secret).await?;
 
@@ -63,7 +64,7 @@ pub async fn connect_and_dispatch_level3(
         match msg {
             Ok(Message::Text(text)) => {
                 if is_channel_level3(text.as_str()) {
-                    sender.send(text.to_string())?;
+                    sender.send(text)?;
                 } else if let Some(error) = extract_error(text.as_str()) {
                     return Err(error.into());
                 }
