@@ -57,14 +57,14 @@ impl Order {
     }
 
     pub(super) fn try_from_wire(
-        wire_order: wire::Order,
+        wire_order: wire::Order<'_>,
         price_scale: u8,
         qty_scale: u8,
     ) -> Result<Order, Box<dyn Error>> {
         Ok(Order {
             order_id: wire_order.order_id,
-            limit_price: units::to_units(wire_order.limit_price, price_scale)?,
-            order_qty: units::to_units(wire_order.order_qty, qty_scale)?,
+            limit_price: units::parse_units(wire_order.limit_price.get(), price_scale)?,
+            order_qty: units::parse_units(wire_order.order_qty.get(), qty_scale)?,
             timestamp: wire_order.timestamp,
         })
     }
@@ -80,14 +80,14 @@ pub(super) struct OrderEvent {
 
 impl OrderEvent {
     pub(super) fn try_from_wire(
-        wire_update: wire::OrderEvent,
+        wire_update: wire::OrderEvent<'_>,
         price_scale: u8,
         qty_scale: u8,
     ) -> Result<OrderEvent, Box<dyn Error>> {
         Ok(OrderEvent {
             order_id: wire_update.order_id,
-            limit_price: units::to_units(wire_update.limit_price, price_scale)?,
-            order_qty: units::to_units(wire_update.order_qty, qty_scale)?,
+            limit_price: units::parse_units(wire_update.limit_price.get(), price_scale)?,
+            order_qty: units::parse_units(wire_update.order_qty.get(), qty_scale)?,
             timestamp: wire_update.timestamp,
             event: wire_update.event,
         })

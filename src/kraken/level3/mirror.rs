@@ -3,8 +3,8 @@ use super::{order_book, wire};
 use std::cell::RefCell;
 use std::error::Error;
 
-type SnapshotMsg = wire::Envelope<wire::Payload<wire::Order>>;
-type UpdateMsg = wire::Envelope<wire::Payload<wire::OrderEvent>>;
+type SnapshotMsg<'a> = wire::Envelope<wire::Payload<wire::Order<'a>>>;
+type UpdateMsg<'a> = wire::Envelope<wire::Payload<wire::OrderEvent<'a>>>;
 type Snapshot = wire::Payload<order_book::Order>;
 type Update = wire::Payload<order_book::OrderEvent>;
 
@@ -43,7 +43,7 @@ impl OrderBookMirror {
     }
 
     #[cold]
-    fn process_snapshot(&mut self, snapshot_msg: SnapshotMsg) -> Result<(), Box<dyn Error>> {
+    fn process_snapshot(&mut self, snapshot_msg: SnapshotMsg<'_>) -> Result<(), Box<dyn Error>> {
         let price_scale = self.context.price_scale;
         let qty_scale = self.context.qty_scale;
         snapshot_msg.data.into_iter().try_for_each(|wire_order| {
@@ -52,7 +52,7 @@ impl OrderBookMirror {
         })
     }
 
-    fn process_update(&mut self, update_msg: UpdateMsg) -> Result<(), Box<dyn Error>> {
+    fn process_update(&mut self, update_msg: UpdateMsg<'_>) -> Result<(), Box<dyn Error>> {
         let price_scale = self.context.price_scale;
         let qty_scale = self.context.qty_scale;
         update_msg.data.into_iter().try_for_each(|wire_update| {
@@ -199,7 +199,7 @@ impl OrderBookUpdater {
 
 impl Snapshot {
     fn try_from_wire(
-        snapshot: wire::Payload<wire::Order>,
+        snapshot: wire::Payload<wire::Order<'_>>,
         price_scale: u8,
         qty_scale: u8,
     ) -> Result<Snapshot, Box<dyn Error>> {
@@ -226,7 +226,7 @@ impl Snapshot {
 
 impl Update {
     fn try_from_wire(
-        update: wire::Payload<wire::OrderEvent>,
+        update: wire::Payload<wire::OrderEvent<'_>>,
         price_scale: u8,
         qty_scale: u8,
     ) -> Result<Update, Box<dyn Error>> {

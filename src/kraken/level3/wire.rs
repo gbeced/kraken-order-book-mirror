@@ -1,7 +1,7 @@
 use crate::common::ts::Ts;
 use chrono::{DateTime, Utc};
-use rust_decimal::Decimal;
 use serde::{Deserialize, Deserializer};
+use serde_json::value::RawValue;
 
 // https://docs.kraken.com/exchange/api-reference/spot-websocket-v2/level3
 
@@ -22,14 +22,16 @@ pub(super) struct Payload<T> {
     pub asks: Vec<T>,
 }
 
+// Prices and quantities stay as raw JSON number text, borrowed from the frame.
+// The scales are only known at runtime, so `try_from_wire` turns them into units.
 #[derive(Deserialize)]
-pub(super) struct Order {
+pub(super) struct Order<'a> {
     #[serde(deserialize_with = "deserialize_order_id")]
     pub order_id: OrderId,
-    #[serde(with = "rust_decimal::serde::arbitrary_precision")]
-    pub limit_price: Decimal,
-    #[serde(with = "rust_decimal::serde::arbitrary_precision")]
-    pub order_qty: Decimal,
+    #[serde(borrow)]
+    pub limit_price: &'a RawValue,
+    #[serde(borrow)]
+    pub order_qty: &'a RawValue,
     #[serde(deserialize_with = "deserialize_ts")]
     pub timestamp: Ts,
 }
@@ -43,13 +45,13 @@ pub(super) enum EventType {
 }
 
 #[derive(Deserialize)]
-pub(super) struct OrderEvent {
+pub(super) struct OrderEvent<'a> {
     #[serde(deserialize_with = "deserialize_order_id")]
     pub order_id: OrderId,
-    #[serde(with = "rust_decimal::serde::arbitrary_precision")]
-    pub limit_price: Decimal,
-    #[serde(with = "rust_decimal::serde::arbitrary_precision")]
-    pub order_qty: Decimal,
+    #[serde(borrow)]
+    pub limit_price: &'a RawValue,
+    #[serde(borrow)]
+    pub order_qty: &'a RawValue,
     #[serde(deserialize_with = "deserialize_ts")]
     pub timestamp: Ts,
     pub event: EventType,
