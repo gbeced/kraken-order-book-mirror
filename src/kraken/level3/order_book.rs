@@ -253,31 +253,14 @@ impl Index<usize> for Orders {
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_utils::build_order;
     use super::*;
     use std::str::FromStr;
-    use units::{to_decimal, to_units};
-    use uuid::Uuid;
+    use units::to_decimal;
 
     // BTC/USD tick 0.1 and step 1e-8. The fixtures use these scales.
     const PRICE_SCALE: u8 = 1;
     const QTY_SCALE: u8 = 8;
-
-    fn random_order_id() -> wire::OrderId {
-        // OrderId is a fixed-size byte array, so take the first bytes of a random hex string.
-        let hex = Uuid::new_v4().simple().to_string();
-        hex.as_bytes()[..size_of::<wire::OrderId>()]
-            .try_into()
-            .expect("order id length")
-    }
-
-    fn build_order(limit_price: Decimal, price_scale: u8, qty_scale: u8) -> Order {
-        Order {
-            order_id: random_order_id(),
-            limit_price: to_units(limit_price, price_scale).expect("price units"),
-            order_qty: to_units(Decimal::from(1), qty_scale).expect("qty units"),
-            timestamp: Ts::try_from(chrono::Utc::now()).unwrap(),
-        }
-    }
 
     fn build_orders(prices: &[Decimal], sort_asc: bool) -> Orders {
         Orders::new(

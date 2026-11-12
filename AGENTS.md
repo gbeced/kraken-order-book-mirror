@@ -18,12 +18,13 @@ One package, edition 2024, `rust-version = "1.99"` in `Cargo.toml` (`units.rs` u
 - `src/kraken/mod.rs` — `pub mod level3; pub mod rest_client; mod sign;`
 - `src/kraken/rest_client.rs` — `get_websocket_auth_token` (private, signed) and `get_pair_info` (public `AssetPairs`).
 - `src/kraken/sign.rs` — REST HMAC (`get_signature`). Private module.
-- `src/kraken/level3/mod.rs` — `pub mod mirror; pub mod order_book; pub mod units; pub mod websockets; mod wire;`
+- `src/kraken/level3/mod.rs` — `pub mod mirror; pub mod order_book; pub mod units; #[cfg(test)] mod test_utils; pub mod websockets; mod wire;`
 - `src/kraken/level3/websockets.rs` — connect, subscribe, forward `level3` text frames. Holds the private `is_channel_level3` and `extract_error`, both built on `JsonScanner`.
 - `src/kraken/level3/wire.rs` — private serde types: `Envelope`, `Payload<T>`, `Order`, `OrderEvent`, `EventType`. These share names with the unit types in `order_book.rs`; refer to them as `wire::Order` / `wire::OrderEvent`. `OrderId` is `[u8; 19]`: a longer `order_id` fails deserialization, a shorter one is zero-padded.
 - `src/kraken/level3/units.rs` — `parse_units` (raw JSON number text → units, the wire path), `to_units` (`Decimal` → units, used by tests and benches), `to_decimal`, `serialize_units`.
 - `src/kraken/level3/order_book.rs` — `Order`, `OrderEvent` (unit-converted update event), `Orders` (sorted vec), `OrderBook`. Also holds the per-order wire → units conversions (`Order::try_from_wire`, `OrderEvent::try_from_wire`) and `Order::from_event`.
 - `src/kraken/level3/mirror.rs` — `OrderBookMirror` state machine, apply, checksum.
+- `src/kraken/level3/test_utils.rs` — `#[cfg(test)]` helpers shared by the `order_book` and `mirror` unit tests: `random_order_id`, `build_order`, `build_order_event`. Put new shared level3 test builders here, not in each `tests` module.
 - `benches/mirror.rs` — CodSpeed/Divan harness. Sixteen `on_update` cases apply one ask-side update frame to a 1000-level snapshot (levels 2 ticks apart, orders per level cycled from `LEVEL_SIZES`). The patterns come from `btc_usd_stream.log`: `add_new_level`, `add_join`, `cancel` (delete that leaves the level non-empty), `fill` (in-place modify at the touch), and `clear_backfill_1` / `_4` (a delete clears a size-1 level, then 1 or 4 adds at the price past the deepest level). Each runs at begin / middle / end, except `fill`, which runs at begin only. Checksums are stamped from a trial apply. `replay_stream` applies every update in `btc_usd_stream.log` at depth 10. Snapshot applies are outside the timer.
 - `benches/to_units.rs`, `benches/serialize_units.rs` — Divan micro-benches for `units::to_units` and `units::serialize_units`. All three are `[[bench]]` entries with `harness = false`.
 - `tests/mirror.rs` — integration tests over the fixtures, using depth `10` and scales `1` / `8`.
