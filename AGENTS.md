@@ -34,7 +34,7 @@ One package, edition 2024, `rust-version = "1.99"` in `Cargo.toml` (`units.rs` u
 - `LICENSE` / `NOTICE` — Apache-2.0.
 - `Cargo.toml` / `Cargo.lock` — crate `rust-order-book-mirror`
 
-There is no `rustfmt.toml` / `clippy.toml` / `rust-toolchain.toml`. The toolchain floor is `rust-version` in `Cargo.toml`. Unit tests live in `#[cfg(test)]` modules in `cmds::bench`, `kraken::sign`, `kraken::level3::{units, order_book, mirror, websockets}`, and `tui::{metrics, format, mod, render}`. CI is `.github/workflows/codspeed.yml` only: `cargo codspeed build` then CPU simulation of the Divan benches, triggered on `workflow_dispatch`, push to `master`, and pull requests. `README.md` documents the live client and the bench command, but it is stale (see Known drift).
+There is no `rustfmt.toml` / `clippy.toml` / `rust-toolchain.toml`. The toolchain floor is `rust-version` in `Cargo.toml`. Unit tests live in `#[cfg(test)]` modules in `cmds::bench`, `kraken::sign`, `kraken::level3::{units, order_book, mirror, websockets}`, and `tui::{metrics, format, mod, render}`. CI is `.github/workflows/codspeed.yml` only: `cargo codspeed build` then CPU simulation of the Divan benches, triggered on `workflow_dispatch`, push to `master`, and pull requests. `README.md` covers the project, build and test, and the three commands.
 
 `sign` is private to `kraken`; `rest_client` calls it as `super::sign`. `wire` is private to `level3`. `is_channel_level3` and `extract_error` are private to `level3/websockets.rs`. `common` and `config` are declared only in `lib.rs`. A compiler hint to add a module in `main.rs` is wrong, since `main.rs` uses the library crate.
 
@@ -139,8 +139,6 @@ The checksum hashes every order on the top 10 price levels per side (asks, then 
 
 ## Known drift
 
-- `README.md` still describes the old interface: bare `cargo run`, `bench FILE [--depth N]`, a default depth of `100`, a hardcoded BTC/USD subscription, and hardcoded scales. The real CLI is above. Update it only when asked.
-- `docs/ui-guide.md` still calls the subcommand `mirror` (`cargo run --release -- mirror BTC/USD`); it is `dashboard`. It also omits `Tab`.
 - The `connect_and_dispatch_level3` parameter named `channel` (and `channel` in `cmds::dashboard`) holds the pair, e.g. `BTC/USD`.
 - `get_pair_info` takes the first entry of the `AssetPairs` result and uses `lot_decimals` as the level3 quantity scale. If a pair's feed has finer quantities, `parse_units` fails with `Value exceeds the maximum precision`.
 

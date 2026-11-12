@@ -1,11 +1,11 @@
 # Order Book Dashboard: User Guide
 
-This guide explains the terminal UI of `mirror`: what each panel shows, how every number is computed, and how to read it.
+This guide explains the terminal UI of the `dashboard` command: what each panel shows, how every number is computed, and how to read it.
 
 ```bash
 export KRAKEN_API_KEY=...
 export KRAKEN_API_SECRET=...
-cargo run --release -- mirror BTC/USD [DEPTH]
+cargo run --release -- dashboard BTC/USD [DEPTH]
 ```
 
 `DEPTH` is the number of price levels per side you subscribe to (default `1000`). Everything on screen is computed from that locally mirrored book. Nothing outside the subscribed depth is visible to the UI.
@@ -39,7 +39,10 @@ Resizing the window repaints immediately.
 | --- | --- |
 | `q`, Ctrl-C | Quit |
 | `g` | Cycle ladder price grouping: 1×, 5×, 10×, 50× tick. No visible effect in compact view, which has no ladder |
-| `p` | Pause / resume the display. The book keeps updating underneath; on resume you see the current state |
+| `p` | Pause / resume the display. The book keeps updating underneath; on resume you see the current state. Lag and OFI are sampled only when the screen paints, so they get no samples while paused |
+| `Tab` | Focus the next symbol in the full and medium views. `dashboard` subscribes to one pair, so this only matters with several symbols; the footer shows it only then |
+
+Keys are case-insensitive. While paused, the footer shows `p resume`.
 
 ## Screen anatomy
 
@@ -60,7 +63,7 @@ Resizing the window repaints immediately.
 
 | Field | Meaning |
 | --- | --- |
-| **Status** | `● LIVE` (green): data is fresh. `● STALE` (red): last frame is more than 2 s old. `✖ CROSSED`: best bid is above best ask, which should never happen and signals bad data. `LOCKED` is appended when best bid equals best ask. `❚❚ PAUSED`: display frozen |
+| **Status** | One state, checked in this order: `❚❚ PAUSED`: display frozen. `✖ CROSSED`: best bid is above best ask, which should never happen and signals bad data. `● STALE` (red): last frame is more than 2 s old. `● LIVE` (green): data is fresh. `LOCKED` is appended to any of them when best bid equals best ask |
 | **upd/s** | Frames applied to this book in the last second |
 | **lag p50 / p99** | Median and 99th percentile of (local clock − exchange timestamp of the frame), over the last 10 s of paints. It includes any clock skew between your machine and Kraken, so treat it as a trend rather than an exact latency |
 | **age** | Local clock minus the timestamp of the latest frame. Green under 100 ms, yellow up to 300 ms, red above |
@@ -91,7 +94,7 @@ The book itself, centered on the mid price: **asks above** (best ask nearest the
 
 - **Flash:** when the size at a price changes, the size cell gets a green background (grew) or red background (shrank) for about 400 ms. This makes cancellations and new liquidity visible at a glance.
 - **Grouping (`g`):** buckets prices by 1, 5, 10 or 50 ticks. Asks round up and bids round down, so a bucket never improves on the real price. Order counts and sizes are summed per bucket.
-- **Rows shown:** as many as fit the terminal height.
+- **Rows shown:** as many as fit the terminal height, up to 64 price levels per side.
 - **Bar scale:** both sides share one scale, based on the largest `cum` among the visible rows. If one side is much thicker than the other within the visible range, the thinner side's bars become very short. The numbers are still correct. Use the Depth panel to see further out.
 
 ### Imbalance
@@ -128,8 +131,8 @@ Estimated cost of a **market order** of a given size, walking the visible book:
 
 - Rows are 10k, 100k and 1M of quote currency (USD for BTC/USD).
 - `buy` walks the asks upward, `sell` walks the bids downward.
-- Value = volume-weighted average fill price versus mid, in bps. 0.0 means the order fits within the touch at about mid.
-- Colors: bold white under 3 bps, yellow from 3 bps, red from 10 bps.
+- Value = volume-weighted average fill price versus mid, in bps. Even an order that fits at the touch pays half the spread, which rounds to 0.0 on a tight book.
+- Colors: bold default color under 3 bps, yellow from 3 bps, red from 10 bps.
 - `—` means the visible book is not deep enough to fill the order.
 
 This ignores fees and any liquidity that appears or disappears while you trade.
@@ -172,7 +175,7 @@ On a narrow terminal, a field that doesn't fit is dropped whole, because a clipp
 
 ## Limitations
 
-- Only the subscribed depth is visible. There is no reconnect or token refresh, so the session ends after an error or when the token expires.
+- Only the subscribed depth is visible. There is no reconnect or token refresh, so the session ends after an error, when the connection closes, or after 5 seconds without a message.
 - Lag includes clock skew, and OFI is sampled at 10 Hz.
 - `pair_decimals` and `lot_decimals` from Kraken's REST `AssetPairs` endpoint define the tick and the size step.
 - The dashboard shows one symbol at a time.
