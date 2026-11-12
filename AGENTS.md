@@ -142,7 +142,6 @@ The checksum hashes every order on the top 10 price levels per side (asks, then 
 - `docs/ui-guide.md` still calls the subcommand `mirror` (`cargo run --release -- mirror BTC/USD`); it is `dashboard`. It also omits `Tab`.
 - The `connect_and_dispatch_level3` parameter named `channel` (and `channel` in `cmds::dashboard`) holds the pair, e.g. `BTC/USD`.
 - `get_pair_info` takes the first entry of the `AssetPairs` result and uses `lot_decimals` as the level3 quantity scale. If a pair's feed has finer quantities, `parse_units` fails with `Value exceeds the maximum precision`.
-- `tests/mirror.rs::mirror_checksum_mismatch_after_update` replays the whole stream and asserts the final timestamp. It does not test a mismatch.
 
 ## Boundaries
 

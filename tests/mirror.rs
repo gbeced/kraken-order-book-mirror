@@ -69,7 +69,7 @@ mod tests {
     }
 
     #[test]
-    fn mirror_checksum_mismatch_after_update() {
+    fn mirror_replay_stream() {
         let mut mirror = mirror::OrderBookMirror::new(10, PRICE_SCALE, QTY_SCALE);
         let mut reader = open_test_file("btc_usd_stream.log");
         let mut line = String::new();
