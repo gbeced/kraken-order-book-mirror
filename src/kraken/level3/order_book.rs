@@ -151,7 +151,11 @@ impl<O: SortOrder> Orders<O> {
     }
 
     pub(super) fn insert_order(&mut self, order: Order) {
-        let idx = self.orders.partition_point(|o| O::order_before(o, &order));
+        let idx = self
+            .orders
+            .iter()
+            .position(|o| O::order_before(&order, o))
+            .unwrap_or(self.orders.len());
         self.orders.insert(idx, order);
     }
 
@@ -169,10 +173,12 @@ impl<O: SortOrder> Orders<O> {
         order_id: &wire::OrderId,
         limit_price: u64,
     ) -> Option<(usize, &'a mut Order)> {
-        // First we locate the price level using a binary search first.
+        // Get to the beggining of the price level.
         let begin = self
             .orders
-            .partition_point(|o| O::order_before_key(o, &limit_price, &Ts(0)));
+            .iter()
+            .position(|o| !O::order_before_key(o, &limit_price, &Ts(0)))
+            .unwrap_or(self.orders.len());
 
         // Search by order id within the price level.
         for (i, o) in self.orders.iter_mut().skip(begin).enumerate() {
