@@ -118,16 +118,23 @@ impl Orders {
     }
 
     pub(super) fn insert_order(&mut self, order: Order) {
-        let idx = self.orders.partition_point(|o| match self.sort_asc {
-            true => {
-                o.limit_price < order.limit_price
-                    || o.limit_price == order.limit_price && o.timestamp < order.timestamp
-            }
-            false => {
-                o.limit_price > order.limit_price
-                    || o.limit_price == order.limit_price && o.timestamp < order.timestamp
-            }
-        });
+        let mut idx = self.orders.len();
+        for (i, o) in self.orders.iter().enumerate() {
+            match self.sort_asc {
+                true => {
+                    if order.limit_price == o.limit_price && order.timestamp < o.timestamp || order.limit_price < o.limit_price {
+                        idx = i;
+                        break
+                    }
+                }
+                false => {
+                    if order.limit_price == o.limit_price && order.timestamp < o.timestamp || order.limit_price > o.limit_price {
+                        idx = i;
+                        break
+                    }
+                }
+            };
+        }
         self.orders.insert(idx, order);
     }
 
@@ -145,19 +152,26 @@ impl Orders {
         order_id: &wire::OrderId,
         limit_price: u64,
     ) -> Option<(usize, &'a mut Order)> {
-        // Orders are sorted by limit_price (asc/desc) + timestamp(asc).
-        // First we locate the price level using a binary search first.
-        let idx = self.orders.partition_point(|o| match self.sort_asc {
-            true => o.limit_price < limit_price,
-            false => o.limit_price > limit_price,
-        });
-        // Then we do a linear search within the price level.
-        for (idx, order) in (idx..).zip(self.orders.iter_mut().skip(idx)) {
-            if order.order_id == *order_id {
-                return Some((idx, order));
-            } else if order.limit_price != limit_price {
-                return None;
-            }
+
+        for (i, o) in self.orders.iter_mut().enumerate() {
+            match self.sort_asc {
+                true => {
+                    if limit_price < o.limit_price {
+                        return None;
+                    }
+                    else if limit_price == o.limit_price && order_id == &o.order_id {
+                        return Some((i, o));
+                    }
+                }
+                false => {
+                    if limit_price > o.limit_price {
+                        return None;
+                    }
+                    else if limit_price == o.limit_price && order_id == &o.order_id {
+                        return Some((i, o));
+                    }
+                }
+            };
         }
         None
     }
