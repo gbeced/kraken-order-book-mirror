@@ -2,11 +2,12 @@ use super::{units, wire};
 use crate::common::ts::Ts;
 use rust_decimal::Decimal;
 use std::error::Error;
+use std::marker::PhantomData;
 use std::ops::Index;
 
 pub struct OrderBook {
-    pub asks: Orders,
-    pub bids: Orders,
+    pub asks: Orders<Asc>,
+    pub bids: Orders<Desc>,
     pub timestamp: Ts,
     price_scale: u8,
     qty_scale: u8,
@@ -14,8 +15,8 @@ pub struct OrderBook {
 
 impl OrderBook {
     pub(super) fn new(
-        asks: Orders,
-        bids: Orders,
+        asks: Orders<Asc>,
+        bids: Orders<Desc>,
         timestamp: Ts,
         price_scale: u8,
         qty_scale: u8,
@@ -94,15 +95,47 @@ impl OrderEvent {
     }
 }
 
-// Orders are sorted by limit_price (asc/desc) + timestamp(asc).
-pub struct Orders {
-    orders: Vec<Order>,
-    sort_asc: bool,
+pub trait SortOrder {
+    fn order_before_key(o1: &Order, p2: &u64, t2: &Ts) -> bool;
+
+    #[inline(always)]
+    fn order_before(o1: &Order, o2: &Order) -> bool {
+        Self::order_before_key(o1, &o2.limit_price, &o2.timestamp)
+    }
 }
 
-impl Orders {
-    pub(super) fn new(orders: Vec<Order>, sort_asc: bool) -> Orders {
-        Orders { orders, sort_asc }
+pub struct Asc;
+pub struct Desc;
+
+impl SortOrder for Asc {
+    #[inline(always)]
+    fn order_before_key(o1: &Order, p2: &u64, t2: &Ts) -> bool {
+        o1.limit_price < *p2 || o1.limit_price == *p2 && o1.timestamp < *t2
+    }
+}
+
+impl SortOrder for Desc {
+    #[inline(always)]
+    fn order_before_key(o1: &Order, p2: &u64, t2: &Ts) -> bool {
+        o1.limit_price > *p2 || o1.limit_price == *p2 && o1.timestamp < *t2
+    }
+}
+
+// Orders are sorted by limit_price (asc/desc) + timestamp(asc).
+pub struct Orders<O: SortOrder> {
+    orders: Vec<Order>,
+    phantom: PhantomData<O>,
+}
+
+pub type Bids = Orders<Desc>;
+pub type Asks = Orders<Asc>;
+
+impl<O: SortOrder> Orders<O> {
+    pub(super) fn new(orders: Vec<Order>) -> Self {
+        Self {
+            orders,
+            phantom: PhantomData,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -118,16 +151,7 @@ impl Orders {
     }
 
     pub(super) fn insert_order(&mut self, order: Order) {
-        let idx = self.orders.partition_point(|o| match self.sort_asc {
-            true => {
-                o.limit_price < order.limit_price
-                    || o.limit_price == order.limit_price && o.timestamp < order.timestamp
-            }
-            false => {
-                o.limit_price > order.limit_price
-                    || o.limit_price == order.limit_price && o.timestamp < order.timestamp
-            }
-        });
+        let idx = self.orders.partition_point(|o| O::order_before(o, &order));
         self.orders.insert(idx, order);
     }
 
@@ -145,18 +169,17 @@ impl Orders {
         order_id: &wire::OrderId,
         limit_price: u64,
     ) -> Option<(usize, &'a mut Order)> {
-        // Orders are sorted by limit_price (asc/desc) + timestamp(asc).
         // First we locate the price level using a binary search first.
-        let idx = self.orders.partition_point(|o| match self.sort_asc {
-            true => o.limit_price < limit_price,
-            false => o.limit_price > limit_price,
-        });
-        // Then we do a linear search within the price level.
-        for (idx, order) in (idx..).zip(self.orders.iter_mut().skip(idx)) {
-            if order.order_id == *order_id {
-                return Some((idx, order));
-            } else if order.limit_price != limit_price {
+        let begin = self
+            .orders
+            .partition_point(|o| O::order_before_key(o, &limit_price, &Ts(0)));
+
+        // Search by order id within the price level.
+        for (i, o) in self.orders.iter_mut().skip(begin).enumerate() {
+            if limit_price != o.limit_price {
                 return None;
+            } else if order_id == &o.order_id {
+                return Some((begin + i, o));
             }
         }
         None
@@ -243,7 +266,7 @@ impl Orders {
     }
 }
 
-impl Index<usize> for Orders {
+impl<O: SortOrder> Index<usize> for Orders<O> {
     type Output = Order;
 
     fn index(&self, index: usize) -> &Self::Output {
@@ -262,13 +285,12 @@ mod tests {
     const PRICE_SCALE: u8 = 1;
     const QTY_SCALE: u8 = 8;
 
-    fn build_orders(prices: &[Decimal], sort_asc: bool) -> Orders {
-        Orders::new(
+    fn build_orders<O: SortOrder>(prices: &[Decimal]) -> Orders<O> {
+        Orders::<O>::new(
             prices
                 .iter()
                 .map(|price| build_order(*price, PRICE_SCALE, QTY_SCALE))
                 .collect(),
-            sort_asc,
         )
     }
 
@@ -279,17 +301,14 @@ mod tests {
             "75643.7", "75642.3", "75640.9", "75639.9", "75639.3",
         ]
         .map(|price| Decimal::from_str(price).expect("Invalid value"));
-        let bids = build_orders(&prices, false);
+        let bids = build_orders::<Desc>(&prices);
 
         assert_eq!(bids.find_price_level(0), Some(0));
         assert_eq!(bids.find_price_level(1), Some(4));
         assert_eq!(bids.find_price_level(9), Some(12));
         assert_eq!(bids.find_price_level(10), None);
 
-        let empty_bids = Orders {
-            orders: Vec::new(),
-            sort_asc: false,
-        };
+        let empty_bids = Orders::<Desc>::new(Vec::new());
 
         assert_eq!(empty_bids.find_price_level(0), None);
         assert_eq!(empty_bids.find_price_level(1), None);
@@ -302,7 +321,7 @@ mod tests {
             .into_iter()
             .map(|i| mid_price - Decimal::from(i))
             .collect();
-        let mut bids = build_orders(&prices, false);
+        let mut bids = build_orders::<Desc>(&prices);
 
         assert_eq!(bids.len(), 10);
         assert_eq!(
@@ -358,10 +377,7 @@ mod tests {
     #[test]
     fn orders_truncate_crowded_levels() {
         // Several orders share a price.
-        let mut crowded = Orders {
-            orders: Vec::new(),
-            sort_asc: false,
-        };
+        let mut crowded = Orders::<Desc>::new(Vec::new());
         for (price, count) in [(100, 2), (90, 1), (80, 2)] {
             for _ in 0..count {
                 crowded.insert_order(build_order(Decimal::from(price), PRICE_SCALE, QTY_SCALE));
@@ -386,11 +402,8 @@ mod tests {
 
     #[test]
     fn orders_insert_and_delete() {
-        let prices: Vec<Decimal> = (0..3)
-            .into_iter()
-            .map(|i| Decimal::from(1) + Decimal::from(i))
-            .collect();
-        let mut orders = build_orders(&prices, true);
+        let prices: Vec<Decimal> = [1, 2, 3].into_iter().map(Decimal::from).collect();
+        let mut orders = build_orders::<Asc>(&prices);
 
         for value in ["0.5", "1.5", "3"] {
             orders.insert_order(build_order(
