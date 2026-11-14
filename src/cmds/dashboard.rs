@@ -49,8 +49,8 @@ async fn obook_updater(
                             continue;
                         }
                         let ob = mirror.get_order_book().expect("No order book");
-                        let asks = to_decimal_orders(ob, &ob.asks);
-                        let bids = to_decimal_orders(ob, &ob.bids);
+                        let asks = to_decimal_orders(ob, ob.asks.iter());
+                        let bids = to_decimal_orders(ob, ob.bids.iter());
                         screen.draw(&channel, &asks, &bids, ob.timestamp)?;
                     }
                     Err(e) => {
@@ -72,10 +72,9 @@ async fn recv_ui(events: &mut Option<mpsc::UnboundedReceiver<UiEvent>>) -> UiEve
 
 fn to_decimal_orders(
     ob: &order_book::OrderBook,
-    orders: &order_book::Orders,
+    order_it: std::slice::Iter<'_, order_book::Order>,
 ) -> Vec<(rust_decimal::Decimal, rust_decimal::Decimal)> {
-    orders
-        .iter()
+    order_it
         .map(|order| {
             (
                 ob.price_to_decimal(order.limit_price),
