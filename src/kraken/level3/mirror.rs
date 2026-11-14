@@ -133,8 +133,8 @@ impl OrderBookUpdater {
         price_scale: u8,
         qty_scale: u8,
     ) -> OrderBookUpdater {
-        let asks = order_book::Orders::new(snapshot.asks, true);
-        let bids = order_book::Orders::new(snapshot.bids, false);
+        let asks = order_book::Asks::new(snapshot.asks);
+        let bids = order_book::Bids::new(snapshot.bids);
         let order_book =
             order_book::OrderBook::new(asks, bids, snapshot.timestamp, price_scale, qty_scale);
         OrderBookUpdater {
