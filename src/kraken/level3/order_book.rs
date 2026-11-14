@@ -98,6 +98,7 @@ impl OrderEvent {
 pub trait SortOrder {
     fn key_before(p1: &u64, t1: &Ts, o2: &Order) -> bool;
 
+    #[inline(always)]
     fn order_before(o1: &Order, o2: &Order) -> bool {
         Self::key_before(&o1.limit_price, &o1.timestamp, o2)
     }
@@ -107,12 +108,14 @@ pub struct Asc;
 pub struct Desc;
 
 impl SortOrder for Asc {
+    #[inline(always)]
     fn key_before(p1: &u64, t1: &Ts, o2: &Order) -> bool {
         *p1 < o2.limit_price || *p1 == o2.limit_price && *t1 < o2.timestamp
     }
 }
 
 impl SortOrder for Desc {
+    #[inline(always)]
     fn key_before(p1: &u64, t1: &Ts, o2: &Order) -> bool {
         *p1 > o2.limit_price || *p1 == o2.limit_price && *t1 < o2.timestamp
     }
