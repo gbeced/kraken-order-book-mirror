@@ -124,7 +124,7 @@ impl SortOrder for Desc {
 // Orders are sorted by limit_price (asc/desc) + timestamp(asc).
 pub struct Orders<O: SortOrder> {
     orders: Vec<Order>,
-    phantom: PhantomData<O>,
+    _phantom: PhantomData<O>,
 }
 
 pub type Bids = Orders<Desc>;
@@ -134,7 +134,7 @@ impl<O: SortOrder> Orders<O> {
     pub(super) fn new(orders: Vec<Order>) -> Self {
         Self {
             orders,
-            phantom: PhantomData,
+            _phantom: PhantomData,
         }
     }
 
