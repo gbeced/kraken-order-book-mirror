@@ -1,8 +1,6 @@
 use super::wire;
-use crate::common::ts::Ts;
-use crate::common::units;
+use crate::common::{error::Error, ts::Ts, units};
 use rust_decimal::Decimal;
-use std::error::Error;
 use std::marker::PhantomData;
 use std::ops::Index;
 
@@ -62,7 +60,7 @@ impl Order {
         wire_order: wire::Order<'_>,
         price_scale: u8,
         qty_scale: u8,
-    ) -> Result<Order, Box<dyn Error>> {
+    ) -> Result<Order, Error> {
         Ok(Order {
             order_id: wire_order.order_id,
             limit_price: units::parse_units(wire_order.limit_price.get(), price_scale)?,
@@ -85,7 +83,7 @@ impl OrderEvent {
         wire_update: wire::OrderEvent<'_>,
         price_scale: u8,
         qty_scale: u8,
-    ) -> Result<OrderEvent, Box<dyn Error>> {
+    ) -> Result<OrderEvent, Error> {
         Ok(OrderEvent {
             order_id: wire_update.order_id,
             limit_price: units::parse_units(wire_update.limit_price.get(), price_scale)?,
@@ -238,7 +236,7 @@ impl<O: SortOrder> Orders<O> {
         }
     }
 
-    pub(super) fn apply_events(&mut self, events: Vec<OrderEvent>) -> Result<(), Box<dyn Error>> {
+    pub(super) fn apply_events(&mut self, events: Vec<OrderEvent>) -> Result<(), Error> {
         for event in events {
             match event.event {
                 // A new order added to the book.
@@ -248,17 +246,13 @@ impl<O: SortOrder> Orders<O> {
                 // The order has been removed from the book, i.e. full fill or cancel.
                 wire::EventType::Delete => {
                     if !self.remove_order(&event.order_id, event.limit_price) {
-                        return Err(format!(
-                            "Order not found {}",
-                            std::str::from_utf8(&event.order_id)?
-                        )
-                        .into());
+                        return Err(Error::UpdateFailed("Order not found".to_string()));
                     }
                 }
                 // The order quantity has been modified, i.e. a fill.
                 wire::EventType::Modify => {
                     if !self.modify_order(Order::from_event(event)) {
-                        return Err("Order not found".into());
+                        return Err(Error::UpdateFailed("Order not found".to_string()));
                     }
                 }
             }

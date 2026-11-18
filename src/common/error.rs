@@ -16,6 +16,8 @@ pub enum Error {
     UnitConversion(String),
     #[error("{0}")]
     IPCChannelClosed(String),
+    #[error("{0}")]
+    UpdateFailed(String),
 }
 
 impl From<serde_json::Error> for Error {
