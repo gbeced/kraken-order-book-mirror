@@ -40,8 +40,6 @@ pub(super) fn build_order_event(
 }
 
 fn to_units(value: Decimal, scale: u8) -> u64 {
-    let units = value * Decimal::from(
-        10_u64.pow(scale.into())
-    );
+    let units = value * Decimal::from(10_u64.pow(scale.into()));
     units.try_into().expect("conversion failed")
 }
