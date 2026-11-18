@@ -82,12 +82,6 @@ pub async fn connect_and_dispatch_level3(
     Ok(())
 }
 
-impl From<tokio_tungstenite::tungstenite::Error> for Error {
-    fn from(error: tokio_tungstenite::tungstenite::Error) -> Self {
-        Error::Network(error.to_string())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

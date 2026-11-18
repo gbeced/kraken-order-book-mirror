@@ -27,8 +27,7 @@ pub async fn get_websocket_auth_token(
         .map_err(|e| Error::Other(e.to_string()))?
         .as_millis();
     let body = format!("nonce={nonce}");
-    let signature = sign::get_signature(path, nonce, &body, api_secret)
-        .map_err(|e| Error::Sign(e.to_string()))?;
+    let signature = sign::get_signature(path, nonce, &body, api_secret)?;
 
     let url = format!("https://api.kraken.com{path}");
     let client = reqwest::Client::new();
@@ -39,16 +38,12 @@ pub async fn get_websocket_auth_token(
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(body)
         .send()
-        .await
-        .map_err(|e| -> Error { Error::Network(e.to_string()) })?
-        .error_for_status()
-        .map_err(|e| -> Error { Error::Other(e.to_string()) })?;
+        .await?
+        .error_for_status()?;
     let body = response
         .text()
-        .await
-        .map_err(|e| -> Error { Error::Network(e.to_string()) })?;
-    let parsed: ApiResponse<TokenResult> =
-        serde_json::from_str(&body).map_err(|e| -> Error { Error::Parse(e.to_string()) })?;
+        .await?;
+    let parsed: ApiResponse<TokenResult> = serde_json::from_str(&body)?;
     let Some(token_result) = parsed.result else {
         return Err(Error::Other(parsed.error.join("; ")));
     };
@@ -77,18 +72,12 @@ pub async fn get_pair_info(pair: &str) -> Result<PairInfo, Error> {
         .get(url)
         .query(&params)
         .send()
-        .await
-        .map_err(|e| -> Error { Error::Network(e.to_string()) })?
-        .error_for_status()
-        .map_err(|e| -> Error { Error::Other(e.to_string()) })?;
+        .await?
+        .error_for_status()?;
 
-    let body = response
-        .text()
-        .await
-        .map_err(|e| -> Error { Error::Network(e.to_string()) })?;
+    let body = response.text().await?;
 
-    let parsed: ApiResponse<HashMap<String, AssetPair>> =
-        serde_json::from_str(&body).map_err(|e| -> Error { Error::Parse(e.to_string()) })?;
+    let parsed: ApiResponse<HashMap<String, AssetPair>> = serde_json::from_str(&body)?;
 
     let Some(asset_pairs) = parsed.result else {
         let error = match parsed
