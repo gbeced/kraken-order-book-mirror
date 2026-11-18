@@ -1,7 +1,7 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256, Sha512};
-use std::error::Error;
+use crate::common::error::Error;
 
 type HmacSha512 = Hmac<Sha512>;
 
@@ -10,15 +10,19 @@ pub fn get_signature(
     nonce: u128,
     body: &str,
     api_secret: &str,
-) -> Result<String, Box<dyn Error>> {
+) -> Result<String, Error> {
     let encoded_data = format!("{nonce}{body}");
     let digest = Sha256::digest(&encoded_data);
     let mut message: Vec<u8> = Vec::with_capacity(url_path.len() + digest.len());
     message.extend_from_slice(url_path.as_bytes());
     message.extend_from_slice(&digest);
 
-    let secret_bytes = STANDARD.decode(api_secret)?;
-    let mut mac = HmacSha512::new_from_slice(&secret_bytes)?;
+    let secret_bytes = STANDARD.decode(api_secret).map_err(
+        |e| Error::Sign(e.to_string())
+    )?;
+    let mut mac = HmacSha512::new_from_slice(&secret_bytes).map_err(
+        |e| Error::Sign(e.to_string())
+    )?;
     mac.update(&message);
 
     let signature = STANDARD.encode(mac.finalize().into_bytes());
