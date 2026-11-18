@@ -12,6 +12,8 @@ pub enum Error {
     InvalidParameter(String),
     #[error("{0}")]
     Other(String),
+    #[error("{0}")]
+    UnitConversion(String),
     // #[error("data store disconnected")]
     // Disconnect(#[from] io::Error),
     // #[error("the data for key `{0}` is not available")]

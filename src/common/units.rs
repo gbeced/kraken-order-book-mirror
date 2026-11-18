@@ -1,12 +1,12 @@
 use rust_decimal::Decimal;
-use std::error::Error;
+use super::error::Error;
 use std::fmt::NumBuffer;
 use std::num::IntErrorKind;
 
 /// Parses raw JSON number text, e.g. `83510.7` or `0.00005100`, into a count of `10^-scale` units.
 /// Only positive decimals are accepted: no exponent, at least one digit on each side of a `.`.
-pub fn parse_units(text: &str, scale: u8) -> Result<u64, Box<dyn Error>> {
-    fn exp_scale(num: u64, exp: u32) -> Result<u64, Box<dyn Error>> {
+pub fn parse_units(text: &str, scale: u8) -> Result<u64, Error> {
+    fn exp_scale(num: u64, exp: u32) -> Result<u64, Error> {
         let res = num
             .checked_mul(10_u64.checked_pow(exp).ok_or_else(overflow_error)?)
             .ok_or_else(overflow_error)?;
@@ -23,7 +23,7 @@ pub fn parse_units(text: &str, scale: u8) -> Result<u64, Box<dyn Error>> {
     let parsed_int = int_part.parse::<u64>().map_err(|e| match e.kind() {
         IntErrorKind::PosOverflow => overflow_error(),
         IntErrorKind::NegOverflow => overflow_error(),
-        _ => other_error("Invalid number"),
+        _ => Error::Parse("Invalid number".into()),
     })?;
     let mut units: u64 = exp_scale(parsed_int, scale.into())?;
 
@@ -76,12 +76,12 @@ pub fn serialize_units(units: u64, out: &mut String) {
     out.push_str(units.format_into(&mut buf));
 }
 
-fn overflow_error() -> Box<dyn Error> {
-    "Overflow".into()
+fn overflow_error() -> Error {
+    Error::UnitConversion("Overflow".into())
 }
 
-fn other_error(msg: &str) -> Box<dyn Error> {
-    msg.into()
+fn other_error(msg: &str) -> Error {
+    Error::UnitConversion(msg.into())
 }
 
 #[cfg(test)]
