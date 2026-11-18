@@ -3,31 +3,6 @@ use std::error::Error;
 use std::fmt::NumBuffer;
 use std::num::IntErrorKind;
 
-pub fn to_units(value: Decimal, scale: u8) -> Result<u64, Box<dyn Error>> {
-    if value.is_sign_negative() {
-        return Err(other_error("Negative value"));
-    }
-    let scale = u32::from(scale);
-    let mantissa = value.mantissa();
-    let value_scale = value.scale();
-    let units = if value_scale <= scale {
-        let factor = 10i128
-            .checked_pow(scale - value_scale)
-            .ok_or_else(overflow_error)?;
-        mantissa.checked_mul(factor).ok_or_else(overflow_error)?
-    } else {
-        let factor = 10i128
-            .checked_pow(value_scale - scale)
-            .ok_or_else(overflow_error)?;
-        if mantissa % factor != 0 {
-            return Err(other_error("value is not a multiple of the increment"));
-        }
-        mantissa / factor
-    };
-
-    u64::try_from(units).map_err(|_| overflow_error())
-}
-
 /// Parses raw JSON number text, e.g. `83510.7` or `0.00005100`, into a count of `10^-scale` units.
 /// Only positive decimals are accepted: no exponent, at least one digit on each side of a `.`.
 pub fn parse_units(text: &str, scale: u8) -> Result<u64, Box<dyn Error>> {
@@ -116,7 +91,7 @@ mod tests {
     use std::str::FromStr;
 
     #[test]
-    fn units_conversion_round_trip() {
+    fn parse_units_and_convert_to_decimal() {
         let cases = [
             ("0", 0 as u8, 0 as u64),
             ("0", 8, 0),
@@ -139,11 +114,6 @@ mod tests {
         ];
 
         for (str_value, scale, units) in cases {
-            // From decimal to units.
-            assert_eq!(
-                to_units(Decimal::from_str(str_value).unwrap(), scale).unwrap(),
-                units
-            );
             // From raw number text to units.
             assert_eq!(parse_units(str_value, scale).unwrap(), units, "{str_value}");
             // From units to decimal.

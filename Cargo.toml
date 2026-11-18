@@ -31,7 +31,7 @@ divan = { package = "codspeed-divan-compat", version = "5.0.3" }
 uuid = { version = "1.27.0", features = ["v4"] }
 
 [[bench]]
-name = "to_units"
+name = "parse_units"
 harness = false
 
 [[bench]]

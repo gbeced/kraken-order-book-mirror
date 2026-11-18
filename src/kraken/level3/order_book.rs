@@ -1,5 +1,6 @@
-use super::{units, wire};
+use super::wire;
 use crate::common::ts::Ts;
+use crate::common::units;
 use rust_decimal::Decimal;
 use std::error::Error;
 use std::marker::PhantomData;
