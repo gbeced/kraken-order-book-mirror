@@ -23,14 +23,14 @@ pub fn parse_units(text: &str, scale: u8) -> Result<u64, Error> {
     let parsed_int = int_part.parse::<u64>().map_err(|e| match e.kind() {
         IntErrorKind::PosOverflow => overflow_error(),
         IntErrorKind::NegOverflow => overflow_error(),
-        _ => Error::Parse("Invalid number".into()),
+        _ => parse_error("Invalid number"),
     })?;
     let mut units: u64 = exp_scale(parsed_int, scale.into())?;
 
     // Parse and validate the fractional part.
     if let Some(frac_part) = frac_part {
         if frac_part.is_empty() {
-            return Err(other_error("Invalid number"));
+            return Err(parse_error("Fractional part is empty"));
         }
 
         let mut exp: u32 = scale.into();
@@ -44,7 +44,7 @@ pub fn parse_units(text: &str, scale: u8) -> Result<u64, Error> {
                 continue;
             }
             let Some(digit) = char::from(byte).to_digit(10) else {
-                return Err(other_error("Invalid number"));
+                return Err(parse_error("Invalid number"));
             };
 
             let ddunits = u64::from(digit)
@@ -56,7 +56,7 @@ pub fn parse_units(text: &str, scale: u8) -> Result<u64, Error> {
         // Check for trailing non-zero digits that exceed scale.
         for byte in it {
             if byte != b'0' {
-                return Err(other_error("Value exceeds the maximum precision"));
+                return Err(parse_error("Value exceeds the maximum precision"));
             }
         }
     }
@@ -80,8 +80,8 @@ fn overflow_error() -> Error {
     Error::UnitConversion("Overflow".into())
 }
 
-fn other_error(msg: &str) -> Error {
-    Error::UnitConversion(msg.into())
+fn parse_error(msg: &str) -> Error {
+    Error::Parse(msg.into())
 }
 
 #[cfg(test)]
@@ -151,7 +151,7 @@ mod tests {
             ("1E5", 0, "Invalid number"),
             ("\"1.0\"", 1, "Invalid number"),
             ("", 0, "Invalid number"),
-            ("1.", 1, "Invalid number"),
+            ("1.", 1, "Fractional part is empty"),
             (".5", 1, "Invalid number"),
             ("1.2.3", 3, "Invalid number"),
             (" 1", 0, "Invalid number"),
