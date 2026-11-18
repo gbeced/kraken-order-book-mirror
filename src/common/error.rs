@@ -14,4 +14,6 @@ pub enum Error {
     Other(String),
     #[error("{0}")]
     UnitConversion(String),
+    #[error("{0}")]
+    IPCChannelClosed(String),
 }

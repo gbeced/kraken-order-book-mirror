@@ -1,8 +1,8 @@
 use crate::common::json_utils;
+use crate::common::error::Error;
 use crate::kraken::rest_client;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
-use std::error::Error;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
@@ -36,7 +36,7 @@ pub async fn connect_and_dispatch_level3(
     channel: &str,
     depth: usize,
     sender: mpsc::UnboundedSender<Utf8Bytes>,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Error> {
     let token = rest_client::get_websocket_auth_token(api_key, api_secret).await?;
 
     // Connect.
@@ -64,22 +64,28 @@ pub async fn connect_and_dispatch_level3(
         match msg {
             Ok(Message::Text(text)) => {
                 if is_channel_level3(text.as_str()) {
-                    sender.send(text)?;
+                    sender.send(text).map_err(|e| Error::IPCChannelClosed(e.to_string()))?;
                 } else if let Some(error) = extract_error(text.as_str()) {
-                    return Err(error.into());
+                    return Err(Error::Network(error.to_string()));
                 }
             }
             Ok(Message::Close(frame)) => {
-                return Err(format!("Connection closed: {frame:?}").into());
+                return Err(Error::Network(format!("Connection closed: {frame:?}")));
             }
             Ok(_) => {}
             Err(error) => {
-                return Err(error.into());
+                return Err(Error::Network(error.to_string()));
             }
         }
     }
 
     Ok(())
+}
+
+impl From<tokio_tungstenite::tungstenite::Error> for Error {
+    fn from(error: tokio_tungstenite::tungstenite::Error) -> Self {
+        Error::Network(error.to_string())
+    }
 }
 
 #[cfg(test)]
