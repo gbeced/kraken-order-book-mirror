@@ -46,15 +46,17 @@ pub async fn get_websocket_auth_token(
         .send()
         .await?
         .error_for_status()?;
-    let body = response
-        .text()
-        .await?;
+    let body = response.text().await?;
     let parsed: ApiResponse<TokenResult> = serde_json::from_str(&body)?;
     let Some(token_result) = parsed.result else {
+        let msg = parsed.error.join("; ");
         let error = match parsed.has_error("EAPI:Invalid key") {
-            true => Error::InvalidParameter,
-            false => Error::Other,
-        }(parsed.error.join("; "));
+            true => Error::InvalidParameter {
+                name: "API key or secret".to_string(),
+                msg,
+            },
+            false => Error::Other(msg),
+        };
         return Err(error);
     };
 
@@ -86,17 +88,16 @@ pub async fn get_pair_info(pair: &str) -> Result<PairInfo, Error> {
         .error_for_status()?;
 
     let body = response.text().await?;
-
     let parsed: ApiResponse<HashMap<String, AssetPair>> = serde_json::from_str(&body)?;
 
     let Some(asset_pairs) = parsed.result else {
-        let error = match parsed
-            .error
-            .iter()
-            .find(|v| *v == "EQuery:Unknown asset pair")
-        {
-            Some(_) => Error::InvalidParameter(parsed.error.join("; ")),
-            _ => Error::Other(parsed.error.join("; ")),
+        let msg = parsed.error.join("; ");
+        let error = match parsed.has_error("EQuery:Unknown asset pair") {
+            true => Error::InvalidParameter {
+                name: "pair".to_string(),
+                msg,
+            },
+            false => Error::Other(msg),
         };
         return Err(error);
     };

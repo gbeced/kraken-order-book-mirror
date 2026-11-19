@@ -8,8 +8,8 @@ pub enum Error {
     Parse(String),
     #[error("{0}")]
     Sign(String),
-    #[error("{0}")]
-    InvalidParameter(String),
+    #[error("Invalid {name}")]
+    InvalidParameter { name: String, msg: String },
     #[error("{0}")]
     Other(String),
     #[error("{0}")]
