@@ -10,6 +10,12 @@ struct ApiResponse<T> {
     result: Option<T>,
 }
 
+impl<T> ApiResponse<T> {
+    fn has_error(&self, error: &str) -> bool {
+        self.error.iter().find(|e| *e == error).is_some()
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct TokenResult {
     // expires: u64,
@@ -45,7 +51,11 @@ pub async fn get_websocket_auth_token(
         .await?;
     let parsed: ApiResponse<TokenResult> = serde_json::from_str(&body)?;
     let Some(token_result) = parsed.result else {
-        return Err(Error::Other(parsed.error.join("; ")));
+        let error = match parsed.has_error("EAPI:Invalid key") {
+            true => Error::InvalidParameter,
+            false => Error::Other,
+        }(parsed.error.join("; "));
+        return Err(error);
     };
 
     Ok(token_result)
