@@ -1,11 +1,14 @@
 use crate::config;
 use crate::kraken::level3::websockets;
+use crate::kraken::rest_client;
 use std::error::Error;
 use tokio::sync::mpsc;
 
 #[tokio::main]
 pub async fn run(pair: String, depth: usize) -> Result<(), Box<dyn Error>> {
     let (api_key, api_secret) = config::get_credentials()?;
+    // Just to get the pair validated.
+    let _ = rest_client::get_pair_info(&pair).await?;
 
     let (sender, mut receiver) = mpsc::unbounded_channel::<websockets::Utf8Bytes>();
     let producer = tokio::spawn(async move {
