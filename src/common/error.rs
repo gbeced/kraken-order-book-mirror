@@ -18,6 +18,13 @@ pub enum Error {
     IPCChannelClosed(String),
     #[error("{0}")]
     UpdateFailed(String),
+    #[error("Checksum mismatch (expected: {expected} calculated: {calculated})")]
+    ChecksumMismatch{
+        expected: String,
+        calculated: String,
+    },
+    #[error("{0}")]
+    UnexpectedMessage(String),
 }
 
 impl From<serde_json::Error> for Error {

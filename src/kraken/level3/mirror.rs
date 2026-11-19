@@ -1,7 +1,7 @@
 use super::{order_book, wire};
 use crate::common::units;
+use crate::common::error::Error;
 use std::cell::RefCell;
-use std::error::Error;
 
 type SnapshotMsg<'a> = wire::Envelope<wire::Payload<wire::Order<'a>>>;
 type UpdateMsg<'a> = wire::Envelope<wire::Payload<wire::OrderEvent<'a>>>;
@@ -25,13 +25,15 @@ impl OrderBookMirror {
         }
     }
 
-    pub fn on_message(&mut self, msg: &str) -> Result<(), Box<dyn Error>> {
+    pub fn on_message(&mut self, msg: &str) -> Result<(), Error> {
         if let Ok(update_msg) = serde_json::from_str::<UpdateMsg>(msg) {
             self.process_update(update_msg)
         } else if let Ok(snapshot_msg) = serde_json::from_str::<SnapshotMsg>(msg) {
             self.process_snapshot(snapshot_msg)
         } else {
-            Err("Unexpected message".into())
+            Err(
+                Error::UnexpectedMessage(format!("Unexpected message '{} ...'", &msg[..50]))
+            )
         }
     }
 
@@ -43,7 +45,7 @@ impl OrderBookMirror {
     }
 
     #[cold]
-    fn process_snapshot(&mut self, snapshot_msg: SnapshotMsg<'_>) -> Result<(), Box<dyn Error>> {
+    fn process_snapshot(&mut self, snapshot_msg: SnapshotMsg<'_>) -> Result<(), Error> {
         let price_scale = self.context.price_scale;
         let qty_scale = self.context.qty_scale;
         snapshot_msg.data.into_iter().try_for_each(|wire_order| {
@@ -52,7 +54,7 @@ impl OrderBookMirror {
         })
     }
 
-    fn process_update(&mut self, update_msg: UpdateMsg<'_>) -> Result<(), Box<dyn Error>> {
+    fn process_update(&mut self, update_msg: UpdateMsg<'_>) -> Result<(), Error> {
         let price_scale = self.context.price_scale;
         let qty_scale = self.context.qty_scale;
         update_msg.data.into_iter().try_for_each(|wire_update| {
@@ -78,7 +80,7 @@ impl MirrorState {
         &mut self,
         context: &MirrorContext,
         snapshot: Snapshot,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Error> {
         match self {
             MirrorState::WaitingSnapshot => {
                 *self = MirrorState::WaitingUpdate {
@@ -93,9 +95,13 @@ impl MirrorState {
             }
             MirrorState::WaitingUpdate { .. } => {
                 *self = MirrorState::Invalid;
-                Err("Expected update but received snapshot".into())
+                Err(
+                    Error::UnexpectedMessage("Expected update but received snapshot".into())
+                )
             }
-            MirrorState::Invalid => Err("Received snapshot in an invalid state".into()),
+            MirrorState::Invalid => Err(
+                Error::UnexpectedMessage("Received snapshot in an invalid state".into())
+            )
         }
     }
 
@@ -103,11 +109,13 @@ impl MirrorState {
         &mut self,
         _context: &MirrorContext,
         update: Update,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Error> {
         match self {
             MirrorState::WaitingSnapshot => {
                 *self = MirrorState::Invalid;
-                Err("Expected snapshot but received update".into())
+                Err(
+                    Error::UnexpectedMessage("Expected snapshot but received update".into())
+                )
             }
             MirrorState::WaitingUpdate { updater } => {
                 updater.update(update).inspect_err(|_| {
@@ -115,7 +123,9 @@ impl MirrorState {
                     *self = MirrorState::Invalid;
                 })
             }
-            MirrorState::Invalid => Err("Received update in an invalid state".into()),
+            MirrorState::Invalid => Err(
+                Error::UnexpectedMessage("Received update in an invalid state".into())
+            )
         }
     }
 }
@@ -144,7 +154,7 @@ impl OrderBookUpdater {
         }
     }
 
-    fn update(&mut self, update: Update) -> Result<(), Box<dyn Error>> {
+    fn update(&mut self, update: Update) -> Result<(), Error> {
         // If any of these fail, the order book ends up in an invalid state.
         self.order_book.asks.apply_events(update.asks)?;
         self.order_book.asks.truncate_price_level(self.max_depth);
@@ -153,11 +163,7 @@ impl OrderBookUpdater {
 
         let calculated = self.calculate_checksum();
         if calculated != update.checksum {
-            return Err(format!(
-                "Checksum mismatch after update. Calculated: {}. Update: {}",
-                calculated, update.checksum
-            )
-            .into());
+            return Err(Error::ChecksumMismatch { expected: update.checksum.to_string(), calculated: calculated.to_string() });
         }
         self.order_book.timestamp = update.timestamp;
         Ok(())
@@ -202,7 +208,7 @@ impl Snapshot {
         snapshot: wire::Payload<wire::Order<'_>>,
         price_scale: u8,
         qty_scale: u8,
-    ) -> Result<Snapshot, Box<dyn Error>> {
+    ) -> Result<Snapshot, Error> {
         Ok(Snapshot {
             checksum: snapshot.checksum,
             timestamp: snapshot.timestamp,
@@ -229,7 +235,7 @@ impl Update {
         update: wire::Payload<wire::OrderEvent<'_>>,
         price_scale: u8,
         qty_scale: u8,
-    ) -> Result<Update, Box<dyn Error>> {
+    ) -> Result<Update, Error> {
         Ok(Update {
             checksum: update.checksum,
             timestamp: update.timestamp,
