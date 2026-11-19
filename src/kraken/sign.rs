@@ -1,7 +1,7 @@
+use crate::common::error::Error;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::{Digest, Sha256, Sha512};
-use crate::common::error::Error;
 
 type HmacSha512 = Hmac<Sha512>;
 
@@ -17,12 +17,11 @@ pub fn get_signature(
     message.extend_from_slice(url_path.as_bytes());
     message.extend_from_slice(&digest);
 
-    let secret_bytes = STANDARD.decode(api_secret).map_err(
-        |e| Error::Sign(e.to_string())
-    )?;
-    let mut mac = HmacSha512::new_from_slice(&secret_bytes).map_err(
-        |e| Error::Sign(e.to_string())
-    )?;
+    let secret_bytes = STANDARD
+        .decode(api_secret)
+        .map_err(|e| Error::Sign(e.to_string()))?;
+    let mut mac =
+        HmacSha512::new_from_slice(&secret_bytes).map_err(|e| Error::Sign(e.to_string()))?;
     mac.update(&message);
 
     let signature = STANDARD.encode(mac.finalize().into_bytes());

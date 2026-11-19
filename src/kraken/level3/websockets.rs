@@ -1,5 +1,5 @@
-use crate::common::json_utils;
 use crate::common::error::Error;
+use crate::common::json_utils;
 use crate::kraken::rest_client;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
@@ -64,7 +64,9 @@ pub async fn connect_and_dispatch_level3(
         match msg {
             Ok(Message::Text(text)) => {
                 if is_channel_level3(text.as_str()) {
-                    sender.send(text).map_err(|e| Error::IPCChannelClosed(e.to_string()))?;
+                    sender
+                        .send(text)
+                        .map_err(|e| Error::IPCChannelClosed(e.to_string()))?;
                 } else if let Some(error) = extract_error(text.as_str()) {
                     return Err(Error::Network(error.to_string()));
                 }

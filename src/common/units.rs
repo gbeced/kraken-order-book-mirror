@@ -1,5 +1,5 @@
-use rust_decimal::Decimal;
 use super::error::Error;
+use rust_decimal::Decimal;
 use std::fmt::NumBuffer;
 use std::num::IntErrorKind;
 
