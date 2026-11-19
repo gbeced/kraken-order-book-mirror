@@ -19,7 +19,7 @@ pub enum Error {
     #[error("{0}")]
     UpdateFailed(String),
     #[error("Checksum mismatch (expected: {expected} calculated: {calculated})")]
-    ChecksumMismatch{
+    ChecksumMismatch {
         expected: String,
         calculated: String,
     },

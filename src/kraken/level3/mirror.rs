@@ -1,6 +1,6 @@
 use super::{order_book, wire};
-use crate::common::units;
 use crate::common::error::Error;
+use crate::common::units;
 use std::cell::RefCell;
 
 type SnapshotMsg<'a> = wire::Envelope<wire::Payload<wire::Order<'a>>>;
@@ -31,9 +31,10 @@ impl OrderBookMirror {
         } else if let Ok(snapshot_msg) = serde_json::from_str::<SnapshotMsg>(msg) {
             self.process_snapshot(snapshot_msg)
         } else {
-            Err(
-                Error::UnexpectedMessage(format!("Unexpected message '{} ...'", &msg[..50]))
-            )
+            Err(Error::UnexpectedMessage(format!(
+                "Unexpected message '{} ...'",
+                &msg[..50]
+            )))
         }
     }
 
@@ -76,11 +77,7 @@ enum MirrorState {
 }
 
 impl MirrorState {
-    fn on_snapshot(
-        &mut self,
-        context: &MirrorContext,
-        snapshot: Snapshot,
-    ) -> Result<(), Error> {
+    fn on_snapshot(&mut self, context: &MirrorContext, snapshot: Snapshot) -> Result<(), Error> {
         match self {
             MirrorState::WaitingSnapshot => {
                 *self = MirrorState::WaitingUpdate {
@@ -95,27 +92,23 @@ impl MirrorState {
             }
             MirrorState::WaitingUpdate { .. } => {
                 *self = MirrorState::Invalid;
-                Err(
-                    Error::UnexpectedMessage("Expected update but received snapshot".into())
-                )
+                Err(Error::UnexpectedMessage(
+                    "Expected update but received snapshot".into(),
+                ))
             }
-            MirrorState::Invalid => Err(
-                Error::UnexpectedMessage("Received snapshot in an invalid state".into())
-            )
+            MirrorState::Invalid => Err(Error::UnexpectedMessage(
+                "Received snapshot in an invalid state".into(),
+            )),
         }
     }
 
-    fn on_update(
-        &mut self,
-        _context: &MirrorContext,
-        update: Update,
-    ) -> Result<(), Error> {
+    fn on_update(&mut self, _context: &MirrorContext, update: Update) -> Result<(), Error> {
         match self {
             MirrorState::WaitingSnapshot => {
                 *self = MirrorState::Invalid;
-                Err(
-                    Error::UnexpectedMessage("Expected snapshot but received update".into())
-                )
+                Err(Error::UnexpectedMessage(
+                    "Expected snapshot but received update".into(),
+                ))
             }
             MirrorState::WaitingUpdate { updater } => {
                 updater.update(update).inspect_err(|_| {
@@ -123,9 +116,9 @@ impl MirrorState {
                     *self = MirrorState::Invalid;
                 })
             }
-            MirrorState::Invalid => Err(
-                Error::UnexpectedMessage("Received update in an invalid state".into())
-            )
+            MirrorState::Invalid => Err(Error::UnexpectedMessage(
+                "Received update in an invalid state".into(),
+            )),
         }
     }
 }
@@ -163,7 +156,10 @@ impl OrderBookUpdater {
 
         let calculated = self.calculate_checksum();
         if calculated != update.checksum {
-            return Err(Error::ChecksumMismatch { expected: update.checksum.to_string(), calculated: calculated.to_string() });
+            return Err(Error::ChecksumMismatch {
+                expected: update.checksum.to_string(),
+                calculated: calculated.to_string(),
+            });
         }
         self.order_book.timestamp = update.timestamp;
         Ok(())

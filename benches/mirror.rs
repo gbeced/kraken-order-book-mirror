@@ -1,7 +1,7 @@
 use std::fmt::Write;
 
-use rust_order_book_mirror::kraken::level3::mirror::OrderBookMirror;
 use rust_order_book_mirror::common::error::Error;
+use rust_order_book_mirror::kraken::level3::mirror::OrderBookMirror;
 
 const DEPTH: usize = 1000;
 const PRICE_SCALE: u8 = 1;
@@ -173,17 +173,20 @@ fn prepare(case: Case) -> Prepared {
 
 fn stamp_checksum(snapshot: &str, mut update: String) -> String {
     let mut mirror = OrderBookMirror::new(DEPTH, PRICE_SCALE, QTY_SCALE);
-    mirror.on_message(snapshot).expect("Snapshot processing failed");
+    mirror
+        .on_message(snapshot)
+        .expect("Snapshot processing failed");
 
     // Capture the calculated checksum.
     let checksum = match mirror.on_message(&update) {
-        Err(Error::ChecksumMismatch { expected: _, calculated }) => calculated,
+        Err(Error::ChecksumMismatch {
+            expected: _,
+            calculated,
+        }) => calculated,
         Err(e) => {
             panic!("Failed to extract checksum: {}", e);
         }
-        Ok(()) => {
-            return update
-        },
+        Ok(()) => return update,
     };
 
     // Patch the checksum.
