@@ -43,10 +43,8 @@ mod tests {
     #[test]
     fn sign_fails_with_invalid_key() {
         assert_eq!(
-            get_signature("/0/private/GetWebSocketsToken", 10, "nonce=10", "🤓")
-                .unwrap_err()
-                .to_string(),
-            "Invalid symbol 240, offset 0."
+            get_signature("/0/private/GetWebSocketsToken", 10, "nonce=10", "🤓"),
+            Err(Error::Sign("Invalid symbol 240, offset 0.".to_string()))
         );
     }
 }

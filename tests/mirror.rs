@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod tests {
+    use rust_order_book_mirror::common::error::Error;
     use rust_order_book_mirror::kraken::level3::mirror;
     use std::fs::File;
     use std::io::{BufRead, BufReader};
@@ -43,13 +44,17 @@ mod tests {
     fn mirror_processing_fails_with_snapshot_expected() {
         let mut mirror = mirror::OrderBookMirror::new(10, PRICE_SCALE, QTY_SCALE);
 
-        assert_eq!(
-            mirror
-                .on_message(&read_test_file("level3_update_1.json"))
-                .expect_err("Error expected")
-                .to_string(),
-            "Expected snapshot but received update"
-        );
+        match mirror.on_message(&read_test_file("level3_update_1.json")) {
+            Ok(_) => {
+                panic!("Error expected");
+            }
+            Err(Error::UnexpectedMessage(msg)) => {
+                assert_eq!(msg, "Expected snapshot but received update");
+            }
+            Err(other) => {
+                panic!("Unexpected error: {}", other);
+            }
+        }
     }
 
     #[test]
@@ -59,13 +64,18 @@ mod tests {
         mirror
             .on_message(&read_test_file("level3_snapshot.json"))
             .unwrap();
-        assert_eq!(
-            mirror
-                .on_message(&read_test_file("level3_snapshot.json"))
-                .expect_err("Error expected")
-                .to_string(),
-            "Expected update but received snapshot"
-        );
+
+        match mirror.on_message(&read_test_file("level3_snapshot.json")) {
+            Ok(_) => {
+                panic!("Error expected");
+            }
+            Err(Error::UnexpectedMessage(msg)) => {
+                assert_eq!(msg, "Expected update but received snapshot");
+            }
+            Err(other) => {
+                panic!("Unexpected error: {}", other);
+            }
+        }
     }
 
     #[test]

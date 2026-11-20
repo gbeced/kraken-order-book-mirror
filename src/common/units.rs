@@ -140,28 +140,24 @@ mod tests {
     #[test]
     fn parse_units_errors() {
         let cases = [
-            ("-1", 0, "Invalid number"),
-            ("-0.0", 1, "Invalid number"),
-            ("1.05", 1, "Value exceeds the maximum precision"),
-            ("18446744073709551616", 0, "Overflow"),
-            ("1844674407370955161.6", 1, "Overflow"),
-            ("1", 20, "Overflow"),
-            ("1", 255, "Overflow"),
-            ("1e-5", 8, "Invalid number"),
-            ("1E5", 0, "Invalid number"),
-            ("\"1.0\"", 1, "Invalid number"),
-            ("", 0, "Invalid number"),
-            ("1.", 1, "Fractional part is empty"),
-            (".5", 1, "Invalid number"),
-            ("1.2.3", 3, "Invalid number"),
-            (" 1", 0, "Invalid number"),
+            ("-1", 0, Error::Parse("Invalid number".to_string())),
+            ("-0.0", 1, Error::Parse("Invalid number".to_string())),
+            ("1.05", 1, Error::Parse("Value exceeds the maximum precision".to_string())),
+            ("18446744073709551616", 0, Error::UnitConversion("Overflow".to_string())),
+            ("1844674407370955161.6", 1, Error::UnitConversion("Overflow".to_string())),
+            ("1", 20, Error::UnitConversion("Overflow".to_string())),
+            ("1", 255, Error::UnitConversion("Overflow".to_string())),
+            ("1e-5", 8, Error::Parse("Invalid number".to_string())),
+            ("1E5", 0, Error::Parse("Invalid number".to_string())),
+            ("\"1.0\"", 1, Error::Parse("Invalid number".to_string())),
+            ("", 0, Error::Parse("Invalid number".to_string())),
+            ("1.", 1, Error::Parse("Fractional part is empty".to_string())),
+            (".5", 1, Error::Parse("Invalid number".to_string())),
+            ("1.2.3", 3, Error::Parse("Invalid number".to_string())),
+            (" 1", 0, Error::Parse("Invalid number".to_string())),
         ];
-        for (text, scale, message) in cases {
-            assert_eq!(
-                parse_units(text, scale).unwrap_err().to_string(),
-                message,
-                "{text}"
-            );
+        for (text, scale, expected) in cases {
+            assert_eq!(parse_units(text, scale), Err(expected));
         }
     }
 
