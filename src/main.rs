@@ -1,6 +1,5 @@
 use clap::{Parser, Subcommand};
 use rust_order_book_mirror::cmds;
-use std::error::Error;
 
 #[derive(Parser)]
 #[command(
@@ -43,7 +42,7 @@ enum Command {
     },
 }
 
-pub fn main() -> Result<(), Box<dyn Error>> {
+pub fn main() -> Result<(), String> {
     let cli = Cli::parse();
 
     match cli.command {
@@ -51,4 +50,5 @@ pub fn main() -> Result<(), Box<dyn Error>> {
         Command::Dump { pair, depth } => cmds::dump::run(pair, depth),
         Command::Bench { file, pair, depth } => cmds::bench::run(file, pair, depth),
     }
+    .map_err(|e| e.to_string())
 }

@@ -1,4 +1,3 @@
-use super::units::to_units;
 use super::{order_book, wire};
 use crate::common::ts::Ts;
 use rust_decimal::Decimal;
@@ -19,8 +18,8 @@ pub(super) fn build_order(
 ) -> order_book::Order {
     order_book::Order {
         order_id: random_order_id(),
-        limit_price: to_units(limit_price, price_scale).expect("price units"),
-        order_qty: to_units(Decimal::from(1), qty_scale).expect("qty units"),
+        limit_price: to_units(limit_price, price_scale),
+        order_qty: to_units(Decimal::from(1), qty_scale),
         timestamp: Ts::try_from(chrono::Utc::now()).unwrap(),
     }
 }
@@ -33,9 +32,14 @@ pub(super) fn build_order_event(
 ) -> order_book::OrderEvent {
     order_book::OrderEvent {
         order_id: random_order_id(),
-        limit_price: to_units(limit_price, price_scale).expect("price units"),
-        order_qty: to_units(Decimal::from(1), qty_scale).expect("qty units"),
+        limit_price: to_units(limit_price, price_scale),
+        order_qty: to_units(Decimal::from(1), qty_scale),
         timestamp: Ts::try_from(chrono::Utc::now()).unwrap(),
         event,
     }
+}
+
+fn to_units(value: Decimal, scale: u8) -> u64 {
+    let units = value * Decimal::from(10_u64.pow(scale.into()));
+    units.try_into().expect("conversion failed")
 }

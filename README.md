@@ -69,7 +69,7 @@ The program exits on a checksum mismatch, a Kraken error, a closed connection, o
 cargo run --release -- dump BTC/USD > btc_usd.log
 ```
 
-Prints every raw `level3` frame, starting with the snapshot, to stdout, one JSON frame per line. Heartbeats, status messages, and subscription acks are dropped. It does not build a book or open the dashboard. The output is the input format for `bench`.
+Prints every raw `level3` frame, starting with the snapshot, to stdout, one JSON frame per line. It does not build a book or open the dashboard. The output is the input format for `bench`.
 
 ### `bench`
 
@@ -137,10 +137,13 @@ src/
     level3/
       websockets.rs    connect, subscribe, forward level3 frames
       wire.rs          serde types for the JSON frames
-      units.rs         decimal text <-> integer unit conversions
       order_book.rs    orders, sorted sides, insert/modify/remove
       mirror.rs        snapshot/update state machine and checksum
-  common/              timestamps (ns since epoch) and a small JSON scanner
+  common/
+    error.rs           crate error type (thiserror)
+    units.rs           decimal text <-> integer unit conversions
+    ts.rs              timestamps (ns since epoch)
+    json_utils.rs      small JSON scanner
   tui/                 AI Generated ratatui dashboard: metrics, rendering, layout modes
 benches/               Divan / CodSpeed benchmarks
 tests/                 integration tests and fixtures (tests/data/)

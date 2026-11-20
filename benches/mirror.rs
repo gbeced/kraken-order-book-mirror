@@ -1,5 +1,6 @@
 use std::fmt::Write;
 
+use rust_order_book_mirror::common::error::Error;
 use rust_order_book_mirror::kraken::level3::mirror::OrderBookMirror;
 
 const DEPTH: usize = 1000;
@@ -172,23 +173,28 @@ fn prepare(case: Case) -> Prepared {
 
 fn stamp_checksum(snapshot: &str, mut update: String) -> String {
     let mut mirror = OrderBookMirror::new(DEPTH, PRICE_SCALE, QTY_SCALE);
-    mirror.on_message(snapshot).expect("snapshot");
-    let message = match mirror.on_message(&update) {
+    mirror
+        .on_message(snapshot)
+        .expect("Snapshot processing failed");
+
+    // Capture the calculated checksum.
+    let checksum = match mirror.on_message(&update) {
+        Err(Error::ChecksumMismatch {
+            expected: _,
+            calculated,
+        }) => calculated,
+        Err(e) => {
+            panic!("Failed to extract checksum: {}", e);
+        }
         Ok(()) => return update,
-        Err(err) => err.to_string(),
     };
-    let Some((_, after)) = message.split_once("Calculated: ") else {
-        panic!("update failed: {message}");
-    };
-    let calculated = after.split(['.', ' ']).next().unwrap();
-    if calculated.is_empty() || !calculated.bytes().all(|byte| byte.is_ascii_digit()) {
-        panic!("update failed: {message}");
-    }
+
+    // Patch the checksum.
     let needle = "\"checksum\":0";
     let Some(at) = update.find(needle) else {
         panic!("update is missing checksum");
     };
-    update.replace_range(at..at + needle.len(), &format!("\"checksum\":{calculated}"));
+    update.replace_range(at..at + needle.len(), &format!("\"checksum\":{checksum}"));
     update
 }
 

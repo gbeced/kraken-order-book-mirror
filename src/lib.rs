@@ -1,5 +1,5 @@
 pub mod cmds;
-mod common;
+pub mod common;
 mod config;
 pub mod kraken;
 mod tui;

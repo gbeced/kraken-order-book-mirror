@@ -1,3 +1,4 @@
+use super::error::Error;
 use chrono::{DateTime, Utc};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -10,21 +11,21 @@ impl Ts {
     pub fn now() -> Ts {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .expect("clock is out of range");
+            .expect("Clock is out of range");
 
         i64::try_from(now.as_nanos())
             .map(Ts)
-            .expect("clock is out of range")
+            .expect("Clock is out of range")
     }
 }
 
 impl TryFrom<DateTime<Utc>> for Ts {
-    type Error = &'static str;
+    type Error = Error;
 
     fn try_from(dt: DateTime<Utc>) -> Result<Self, Self::Error> {
         dt.timestamp_nanos_opt()
             .map(Ts)
-            .ok_or("timestamp out of range")
+            .ok_or(Error::Other("Timestamp out of range".to_string()))
     }
 }
 
@@ -36,11 +37,12 @@ impl From<Ts> for DateTime<Utc> {
 
 /// Parses an RFC 3339 timestamp, e.g. `2023-10-06T17:35:55.440295123Z`.
 impl TryFrom<&str> for Ts {
-    type Error = &'static str;
+    type Error = Error;
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
-        let dt = DateTime::parse_from_rfc3339(s).map_err(|_| "invalid RFC 3339 timestamp")?;
-        Ts::try_from(dt.with_timezone(&Utc))
+        let dt = DateTime::parse_from_rfc3339(s)
+            .map_err(|_| Error::Parse("Invalid RFC 3339 timestamp".to_string()))?;
+        Ts::try_from(dt.with_timezone(&Utc)).map_err(|e| Error::Parse(e.to_string()))
     }
 }
 
@@ -82,8 +84,7 @@ mod tests {
         for s in ["1600-01-01T00:00:00Z", "2300-01-01T00:00:00Z"] {
             assert_eq!(
                 Ts::try_from(parse(s)),
-                Err("timestamp out of range"),
-                "s={s}"
+                Err(Error::Other("Timestamp out of range".to_string()))
             );
         }
     }
@@ -151,7 +152,7 @@ mod tests {
     fn try_from_str_out_of_range() {
         assert_eq!(
             Ts::try_from("2300-01-01T00:00:00Z"),
-            Err("timestamp out of range")
+            Err(Error::Parse("Timestamp out of range".to_string()))
         );
     }
 
@@ -168,8 +169,7 @@ mod tests {
         for s in cases {
             assert_eq!(
                 Ts::try_from(s),
-                Err("invalid RFC 3339 timestamp"),
-                "s={s:?}"
+                Err(Error::Parse("Invalid RFC 3339 timestamp".to_string()))
             );
         }
     }

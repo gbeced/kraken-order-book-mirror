@@ -1,13 +1,19 @@
 use super::sign;
+use crate::common::error::Error;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::error::Error;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Deserialize)]
 struct ApiResponse<T> {
     error: Vec<String>,
     result: Option<T>,
+}
+
+impl<T> ApiResponse<T> {
+    fn has_error(&self, error: &str) -> bool {
+        self.error.iter().find(|e| *e == error).is_some()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -20,9 +26,12 @@ pub struct TokenResult {
 pub async fn get_websocket_auth_token(
     api_key: &str,
     api_secret: &str,
-) -> Result<TokenResult, Box<dyn Error>> {
+) -> Result<TokenResult, Error> {
     let path = "/0/private/GetWebSocketsToken";
-    let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| Error::Other(e.to_string()))?
+        .as_millis();
     let body = format!("nonce={nonce}");
     let signature = sign::get_signature(path, nonce, &body, api_secret)?;
 
@@ -40,7 +49,15 @@ pub async fn get_websocket_auth_token(
     let body = response.text().await?;
     let parsed: ApiResponse<TokenResult> = serde_json::from_str(&body)?;
     let Some(token_result) = parsed.result else {
-        return Err(parsed.error.join("; ").into());
+        let msg = parsed.error.join("; ");
+        let error = match parsed.has_error("EAPI:Invalid key") {
+            true => Error::InvalidParameter {
+                name: "API key or secret".to_string(),
+                msg,
+            },
+            false => Error::Other(msg),
+        };
+        return Err(error);
     };
 
     Ok(token_result)
@@ -57,7 +74,7 @@ struct AssetPair {
     lot_decimals: u8,
 }
 
-pub async fn get_pair_info(pair: &str) -> Result<PairInfo, Box<dyn Error>> {
+pub async fn get_pair_info(pair: &str) -> Result<PairInfo, Error> {
     // https://docs.kraken.com/api-reference/market-data/get-tradable-asset-pairs
     let path = "/0/public/AssetPairs";
     let url = format!("https://api.kraken.com{path}");
@@ -65,18 +82,27 @@ pub async fn get_pair_info(pair: &str) -> Result<PairInfo, Box<dyn Error>> {
     let client = reqwest::Client::new();
     let response = client
         .get(url)
-        // .header("Content-Type", "application/x-www-form-urlencoded")
         .query(&params)
         .send()
         .await?
         .error_for_status()?;
+
     let body = response.text().await?;
     let parsed: ApiResponse<HashMap<String, AssetPair>> = serde_json::from_str(&body)?;
+
     let Some(asset_pairs) = parsed.result else {
-        return Err(parsed.error.join("; ").into());
+        let msg = parsed.error.join("; ");
+        let error = match parsed.has_error("EQuery:Unknown asset pair") {
+            true => Error::InvalidParameter {
+                name: "pair".to_string(),
+                msg,
+            },
+            false => Error::Other(msg),
+        };
+        return Err(error);
     };
     let Some((_, asset_pair)) = asset_pairs.iter().next() else {
-        return Err("No pairs returned".into());
+        return Err(Error::Other("No pairs returned".into()));
     };
 
     Ok(PairInfo {

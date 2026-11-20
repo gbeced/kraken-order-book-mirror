@@ -1,37 +1,12 @@
+use super::error::Error;
 use rust_decimal::Decimal;
-use std::error::Error;
 use std::fmt::NumBuffer;
 use std::num::IntErrorKind;
 
-pub fn to_units(value: Decimal, scale: u8) -> Result<u64, Box<dyn Error>> {
-    if value.is_sign_negative() {
-        return Err(other_error("Negative value"));
-    }
-    let scale = u32::from(scale);
-    let mantissa = value.mantissa();
-    let value_scale = value.scale();
-    let units = if value_scale <= scale {
-        let factor = 10i128
-            .checked_pow(scale - value_scale)
-            .ok_or_else(overflow_error)?;
-        mantissa.checked_mul(factor).ok_or_else(overflow_error)?
-    } else {
-        let factor = 10i128
-            .checked_pow(value_scale - scale)
-            .ok_or_else(overflow_error)?;
-        if mantissa % factor != 0 {
-            return Err(other_error("value is not a multiple of the increment"));
-        }
-        mantissa / factor
-    };
-
-    u64::try_from(units).map_err(|_| overflow_error())
-}
-
 /// Parses raw JSON number text, e.g. `83510.7` or `0.00005100`, into a count of `10^-scale` units.
 /// Only positive decimals are accepted: no exponent, at least one digit on each side of a `.`.
-pub fn parse_units(text: &str, scale: u8) -> Result<u64, Box<dyn Error>> {
-    fn exp_scale(num: u64, exp: u32) -> Result<u64, Box<dyn Error>> {
+pub fn parse_units(text: &str, scale: u8) -> Result<u64, Error> {
+    fn exp_scale(num: u64, exp: u32) -> Result<u64, Error> {
         let res = num
             .checked_mul(10_u64.checked_pow(exp).ok_or_else(overflow_error)?)
             .ok_or_else(overflow_error)?;
@@ -48,14 +23,14 @@ pub fn parse_units(text: &str, scale: u8) -> Result<u64, Box<dyn Error>> {
     let parsed_int = int_part.parse::<u64>().map_err(|e| match e.kind() {
         IntErrorKind::PosOverflow => overflow_error(),
         IntErrorKind::NegOverflow => overflow_error(),
-        _ => other_error("Invalid number"),
+        _ => parse_error("Invalid number"),
     })?;
     let mut units: u64 = exp_scale(parsed_int, scale.into())?;
 
     // Parse and validate the fractional part.
     if let Some(frac_part) = frac_part {
         if frac_part.is_empty() {
-            return Err(other_error("Invalid number"));
+            return Err(parse_error("Fractional part is empty"));
         }
 
         let mut exp: u32 = scale.into();
@@ -69,7 +44,7 @@ pub fn parse_units(text: &str, scale: u8) -> Result<u64, Box<dyn Error>> {
                 continue;
             }
             let Some(digit) = char::from(byte).to_digit(10) else {
-                return Err(other_error("Invalid number"));
+                return Err(parse_error("Invalid number"));
             };
 
             let ddunits = u64::from(digit)
@@ -81,7 +56,7 @@ pub fn parse_units(text: &str, scale: u8) -> Result<u64, Box<dyn Error>> {
         // Check for trailing non-zero digits that exceed scale.
         for byte in it {
             if byte != b'0' {
-                return Err(other_error("Value exceeds the maximum precision"));
+                return Err(parse_error("Value exceeds the maximum precision"));
             }
         }
     }
@@ -101,12 +76,12 @@ pub fn serialize_units(units: u64, out: &mut String) {
     out.push_str(units.format_into(&mut buf));
 }
 
-fn overflow_error() -> Box<dyn Error> {
-    "Overflow".into()
+fn overflow_error() -> Error {
+    Error::UnitConversion("Overflow".into())
 }
 
-fn other_error(msg: &str) -> Box<dyn Error> {
-    msg.into()
+fn parse_error(msg: &str) -> Error {
+    Error::Parse(msg.into())
 }
 
 #[cfg(test)]
@@ -116,7 +91,7 @@ mod tests {
     use std::str::FromStr;
 
     #[test]
-    fn units_conversion_round_trip() {
+    fn parse_units_and_convert_to_decimal() {
         let cases = [
             ("0", 0 as u8, 0 as u64),
             ("0", 8, 0),
@@ -139,11 +114,6 @@ mod tests {
         ];
 
         for (str_value, scale, units) in cases {
-            // From decimal to units.
-            assert_eq!(
-                to_units(Decimal::from_str(str_value).unwrap(), scale).unwrap(),
-                units
-            );
             // From raw number text to units.
             assert_eq!(parse_units(str_value, scale).unwrap(), units, "{str_value}");
             // From units to decimal.
@@ -170,28 +140,40 @@ mod tests {
     #[test]
     fn parse_units_errors() {
         let cases = [
-            ("-1", 0, "Invalid number"),
-            ("-0.0", 1, "Invalid number"),
-            ("1.05", 1, "Value exceeds the maximum precision"),
-            ("18446744073709551616", 0, "Overflow"),
-            ("1844674407370955161.6", 1, "Overflow"),
-            ("1", 20, "Overflow"),
-            ("1", 255, "Overflow"),
-            ("1e-5", 8, "Invalid number"),
-            ("1E5", 0, "Invalid number"),
-            ("\"1.0\"", 1, "Invalid number"),
-            ("", 0, "Invalid number"),
-            ("1.", 1, "Invalid number"),
-            (".5", 1, "Invalid number"),
-            ("1.2.3", 3, "Invalid number"),
-            (" 1", 0, "Invalid number"),
+            ("-1", 0, Error::Parse("Invalid number".to_string())),
+            ("-0.0", 1, Error::Parse("Invalid number".to_string())),
+            (
+                "1.05",
+                1,
+                Error::Parse("Value exceeds the maximum precision".to_string()),
+            ),
+            (
+                "18446744073709551616",
+                0,
+                Error::UnitConversion("Overflow".to_string()),
+            ),
+            (
+                "1844674407370955161.6",
+                1,
+                Error::UnitConversion("Overflow".to_string()),
+            ),
+            ("1", 20, Error::UnitConversion("Overflow".to_string())),
+            ("1", 255, Error::UnitConversion("Overflow".to_string())),
+            ("1e-5", 8, Error::Parse("Invalid number".to_string())),
+            ("1E5", 0, Error::Parse("Invalid number".to_string())),
+            ("\"1.0\"", 1, Error::Parse("Invalid number".to_string())),
+            ("", 0, Error::Parse("Invalid number".to_string())),
+            (
+                "1.",
+                1,
+                Error::Parse("Fractional part is empty".to_string()),
+            ),
+            (".5", 1, Error::Parse("Invalid number".to_string())),
+            ("1.2.3", 3, Error::Parse("Invalid number".to_string())),
+            (" 1", 0, Error::Parse("Invalid number".to_string())),
         ];
-        for (text, scale, message) in cases {
-            assert_eq!(
-                parse_units(text, scale).unwrap_err().to_string(),
-                message,
-                "{text}"
-            );
+        for (text, scale, expected) in cases {
+            assert_eq!(parse_units(text, scale), Err(expected));
         }
     }
 
