@@ -1,6 +1,6 @@
+use super::error::Error;
 use chrono::{DateTime, Utc};
 use std::time::{SystemTime, UNIX_EPOCH};
-use super::error::Error;
 
 /// Nanoseconds since the Unix epoch (UTC).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -40,12 +40,9 @@ impl TryFrom<&str> for Ts {
     type Error = Error;
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
-        let dt = DateTime::parse_from_rfc3339(s).map_err(
-            |_| Error::Parse("Invalid RFC 3339 timestamp".to_string())
-        )?;
-        Ts::try_from(dt.with_timezone(&Utc)).map_err(
-            |e| Error::Parse(e.to_string())
-        )
+        let dt = DateTime::parse_from_rfc3339(s)
+            .map_err(|_| Error::Parse("Invalid RFC 3339 timestamp".to_string()))?;
+        Ts::try_from(dt.with_timezone(&Utc)).map_err(|e| Error::Parse(e.to_string()))
     }
 }
 
