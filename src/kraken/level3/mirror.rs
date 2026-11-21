@@ -35,9 +35,9 @@ impl OrderBookMirror {
         } else if let Ok(snapshot_msg) = serde_json::from_str::<SnapshotMsg>(msg) {
             self.process_snapshot(snapshot_msg)
         } else {
+            let preview: String = msg.chars().take(50).collect();
             Err(Error::UnexpectedMessage(format!(
-                "Unexpected message '{} ...'",
-                &msg[..50]
+                "Unexpected message '{} ...'", preview
             )))
         }
     }
