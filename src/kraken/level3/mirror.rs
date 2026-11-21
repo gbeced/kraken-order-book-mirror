@@ -25,6 +25,10 @@ impl OrderBookMirror {
         }
     }
 
+    pub fn is_valid(&self) -> bool {
+        ! matches!(self.state, MirrorState::Invalid)
+    }
+
     pub fn on_message(&mut self, msg: &str) -> Result<(), Error> {
         if let Ok(update_msg) = serde_json::from_str::<UpdateMsg>(msg) {
             self.process_update(update_msg)
@@ -80,15 +84,18 @@ impl MirrorState {
     fn on_snapshot(&mut self, context: &MirrorContext, snapshot: Snapshot) -> Result<(), Error> {
         match self {
             MirrorState::WaitingSnapshot => {
-                *self = MirrorState::WaitingUpdate {
-                    updater: OrderBookUpdater::new(
-                        snapshot,
-                        context.max_depth,
-                        context.price_scale,
-                        context.qty_scale,
-                    ),
-                };
-                Ok(())
+                match OrderBookUpdater::new(
+                    snapshot, context.max_depth, context.price_scale, context.qty_scale,
+                ) {
+                    Ok(updater) => {
+                        *self = MirrorState::WaitingUpdate { updater};
+                        Ok(())
+                    }
+                    Err(e) => {
+                        *self = MirrorState::Invalid;
+                        Err(e)
+                    }
+                }
             }
             MirrorState::WaitingUpdate { .. } => {
                 *self = MirrorState::Invalid;
@@ -135,16 +142,27 @@ impl OrderBookUpdater {
         max_depth: usize,
         price_scale: u8,
         qty_scale: u8,
-    ) -> OrderBookUpdater {
+    ) -> Result<OrderBookUpdater, Error> {
         let asks = order_book::Asks::new(snapshot.asks);
         let bids = order_book::Bids::new(snapshot.bids);
         let order_book =
             order_book::OrderBook::new(asks, bids, snapshot.timestamp, price_scale, qty_scale);
-        OrderBookUpdater {
+        let checksum = snapshot.checksum;
+
+        let ret = OrderBookUpdater {
             order_book,
             max_depth,
             serializer_buff: RefCell::new(String::with_capacity(max_depth * 2 * 10)),
+        };
+        let calculated = ret.calculate_checksum();
+        if calculated != checksum {
+            return Err(Error::ChecksumMismatch {
+                expected: checksum.to_string(),
+                calculated: calculated.to_string(),
+            });
         }
+
+        Ok(ret)
     }
 
     fn update(&mut self, update: Update) -> Result<(), Error> {
@@ -314,7 +332,7 @@ mod tests {
             bids,
             asks,
         };
-        let mut updater = OrderBookUpdater::new(snapshot, 10, 0, 0);
+        let mut updater = OrderBookUpdater::new(snapshot, 10, 0, 0).unwrap();
 
         updater.update(update).unwrap();
         let obook = updater.get_order_book();
@@ -393,5 +411,44 @@ mod tests {
         );
         assert_eq!(obook.timestamp, second_update_ts);
         assert_eq!(updater.calculate_checksum(), 3473600046);
+    }
+
+    #[test]
+    fn updater_fails_with_invalid_snapshot() {
+        // Build the snapshot.
+        let price_scale: u8 = 0;
+        let qty_scale: u8 = 0;
+        let first_ask = Decimal::from(1010);
+        let first_bid = Decimal::from(1000);
+        let bids: Vec<order_book::Order> = (10..20)
+            .into_iter()
+            .map(|i| build_order(first_bid - Decimal::from(i), price_scale, qty_scale))
+            .collect();
+        let asks: Vec<order_book::Order> = (10..20)
+            .into_iter()
+            .map(|i| build_order(first_ask + Decimal::from(i), price_scale, qty_scale))
+            .collect();
+        let snapshot_ts = Ts::try_from("2026-09-15T21:28:25.745828658Z").unwrap();
+        let snapshot = Snapshot {
+            checksum: 0,
+            timestamp: snapshot_ts,
+            bids,
+            asks,
+        };
+
+        match OrderBookUpdater::new(snapshot, 10, 0, 0) {
+            Err(Error::ChecksumMismatch { expected, calculated }) => {
+                assert_eq!(expected, "0");
+                assert_eq!(calculated, "1913449638");
+
+            },
+            Err(other) => {
+                panic!("ChecksumMismatch was expected, got {}", other);
+
+            }
+            Ok(_) => {
+                panic!("ChecksumMismatch was expected")
+            }
+        }
     }
 }

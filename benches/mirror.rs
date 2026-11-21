@@ -202,7 +202,7 @@ fn snapshot_frame() -> String {
     let mut out = String::new();
     // Bids high to low, asks low to high. Slots at a price are oldest first.
     out.push_str(
-        r#"{"channel":"level3","type":"snapshot","data":[{"checksum":0,"symbol":"BTC/USD","timestamp":"2026-01-01T00:00:00Z","bids":"#,
+        r#"{"channel":"level3","type":"snapshot","data":[{"checksum":3090125029,"symbol":"BTC/USD","timestamp":"2026-01-01T00:00:00Z","bids":"#,
     );
     push_side(&mut out, 'b', bid_price);
     out.push_str(r#","asks":"#);

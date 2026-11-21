@@ -98,4 +98,19 @@ mod tests {
             "2026-10-07 16:31:44.979328334 UTC"
         );
     }
+
+    #[test]
+    fn mirror_processing_fails_with_invalid_checksum_in_snapshot() {
+        let mut mirror = mirror::OrderBookMirror::new(10, PRICE_SCALE, QTY_SCALE);
+
+        let msg = read_test_file("level3_snapshot.json").replace("30690248", "0");
+        match mirror.on_message(&msg) {
+            Err(Error::ChecksumMismatch { expected: _, calculated: _ }) => {
+                assert_eq!(mirror.is_valid(), false);
+            },
+            _ => {
+                panic!("ChecksumMismatch was expected")
+            }
+        }
+    }
 }
