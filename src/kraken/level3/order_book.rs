@@ -232,7 +232,7 @@ impl<O: SortOrder> Orders<O> {
     pub(super) fn truncate_price_level(&mut self, max_levels: usize) {
         // Truncates orders leaving only the first max_levels.
         if let Some(truncate_pos) = self.find_price_level(max_levels) {
-            self.orders.drain(truncate_pos..);
+            self.orders.truncate(truncate_pos);
         }
     }
 
