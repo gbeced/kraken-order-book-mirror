@@ -10,8 +10,8 @@ on:
 jobs:
   benchmarks:
     name: Run benchmarks
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
       contents: read
       id-token: write
@@ -21,7 +21,7 @@ jobs:
       - name: Setup rust toolchain, cache and cargo-codspeed binary
         uses: moonrepo/setup-rust@v1
         with:
-          channel: stable
+          channel: "1.99"
           cache-target: release
           bins: cargo-codspeed
 
