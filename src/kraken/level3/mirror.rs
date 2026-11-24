@@ -202,22 +202,13 @@ impl OrderBookUpdater {
         // https://docs.kraken.com/exchange/guides/websockets/l3-checksum-v2
         // Kraken hashes only the top 10 price levels for the checksum.
         const CHECKSUM_PRICE_LEVELS: usize = 10;
-        let ask_count = obook
-            .asks
-            .find_price_level(CHECKSUM_PRICE_LEVELS)
-            .unwrap_or(obook.asks.len());
-        let bid_count = obook
-            .bids
-            .find_price_level(CHECKSUM_PRICE_LEVELS)
-            .unwrap_or(obook.bids.len());
         let mut buff = self.serializer_buff.borrow_mut();
 
         buff.clear();
         for order in obook
             .asks
-            .iter()
-            .take(ask_count)
-            .chain(obook.bids.iter().take(bid_count))
+            .take_up_to_price_level(CHECKSUM_PRICE_LEVELS)
+            .chain(obook.bids.take_up_to_price_level(CHECKSUM_PRICE_LEVELS))
         {
             units::serialize_units(order.limit_price, &mut buff);
             units::serialize_units(order.order_qty, &mut buff);
