@@ -49,6 +49,15 @@ impl OrderBookMirror {
         }
     }
 
+    /// CRC32 of the current book, as `on_message` computes it to verify a
+    /// frame. `None` until a snapshot is applied, or once the state is invalid.
+    pub fn calculate_checksum(&self) -> Option<u32> {
+        match self.state {
+            MirrorState::WaitingUpdate { ref updater } => Some(updater.calculate_checksum()),
+            _ => None,
+        }
+    }
+
     #[cold]
     fn process_snapshot(&mut self, snapshot_msg: SnapshotMsg<'_>) -> Result<(), Error> {
         let price_scale = self.context.price_scale;
