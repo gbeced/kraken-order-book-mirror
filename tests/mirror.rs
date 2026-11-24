@@ -105,9 +105,12 @@ mod tests {
 
         let msg = read_test_file("level3_snapshot.json").replace("30690248", "0");
         match mirror.on_message(&msg) {
-            Err(Error::ChecksumMismatch { expected: _, calculated: _ }) => {
+            Err(Error::ChecksumMismatch {
+                expected: _,
+                calculated: _,
+            }) => {
                 assert_eq!(mirror.is_valid(), false);
-            },
+            }
             _ => {
                 panic!("ChecksumMismatch was expected")
             }

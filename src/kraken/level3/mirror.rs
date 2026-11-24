@@ -26,7 +26,7 @@ impl OrderBookMirror {
     }
 
     pub fn is_valid(&self) -> bool {
-        ! matches!(self.state, MirrorState::Invalid)
+        !matches!(self.state, MirrorState::Invalid)
     }
 
     pub fn on_message(&mut self, msg: &str) -> Result<(), Error> {
@@ -37,7 +37,8 @@ impl OrderBookMirror {
         } else {
             let preview: String = msg.chars().take(50).collect();
             Err(Error::UnexpectedMessage(format!(
-                "Unexpected message '{} ...'", preview
+                "Unexpected message '{} ...'",
+                preview
             )))
         }
     }
@@ -94,10 +95,13 @@ impl MirrorState {
         match self {
             MirrorState::WaitingSnapshot => {
                 match OrderBookUpdater::new(
-                    snapshot, context.max_depth, context.price_scale, context.qty_scale,
+                    snapshot,
+                    context.max_depth,
+                    context.price_scale,
+                    context.qty_scale,
                 ) {
                     Ok(updater) => {
-                        *self = MirrorState::WaitingUpdate { updater};
+                        *self = MirrorState::WaitingUpdate { updater };
                         Ok(())
                     }
                     Err(e) => {
@@ -437,14 +441,15 @@ mod tests {
         };
 
         match OrderBookUpdater::new(snapshot, 10, 0, 0) {
-            Err(Error::ChecksumMismatch { expected, calculated }) => {
+            Err(Error::ChecksumMismatch {
+                expected,
+                calculated,
+            }) => {
                 assert_eq!(expected, "0");
                 assert_eq!(calculated, "1913449638");
-
-            },
+            }
             Err(other) => {
                 panic!("ChecksumMismatch was expected, got {}", other);
-
             }
             Ok(_) => {
                 panic!("ChecksumMismatch was expected")
