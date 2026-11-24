@@ -22,6 +22,13 @@ const STREAM_LOG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/btc_us
 // The log was captured with depth 10.
 const STREAM_DEPTH: usize = 10;
 
+const SNAPSHOT_FIXTURE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/data/level3_snapshot.json"
+);
+// The fixture holds 10 price levels per side.
+const SNAPSHOT_FIXTURE_DEPTH: usize = 10;
+
 fn main() {
     divan::main();
 }
@@ -144,6 +151,18 @@ fn replay_stream(bencher: divan::Bencher) {
             }
             divan::black_box(mirror.get_order_book().expect("book").asks.len())
         });
+}
+
+// The CRC alone on the real BTC/USD snapshot in `level3_snapshot.json`: 10
+// levels per side (18 ask and 13 bid orders), all of which the checksum
+// hashes. The book is built once; the checksum does not change it.
+#[divan::bench]
+fn calculate_checksum(bencher: divan::Bencher) {
+    let snapshot = std::fs::read_to_string(SNAPSHOT_FIXTURE).expect("snapshot fixture");
+    let mut mirror = OrderBookMirror::new(SNAPSHOT_FIXTURE_DEPTH, PRICE_SCALE, QTY_SCALE);
+    mirror.on_message(&snapshot).expect("snapshot");
+    assert_eq!(mirror.calculate_checksum(), Some(30690248));
+    bencher.bench_local(|| divan::black_box(&mirror).calculate_checksum());
 }
 
 struct Prepared {
