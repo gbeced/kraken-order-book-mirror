@@ -151,9 +151,8 @@ impl<O: SortOrder> Orders<O> {
 
     pub fn take_up_to_price_level(&self, level: usize) -> impl Iterator<Item = &Order> {
         self.orders
-            .chunk_by(|o1, o2| o1.limit_price == o2.limit_price)
-            .take(level)
-            .flatten()
+            .iter()
+            .take_while(price_levels(level))
     }
 
     pub(super) fn insert_order(&mut self, order: Order) {
@@ -273,6 +272,18 @@ impl<O: SortOrder> Index<usize> for Orders<O> {
 
     fn index(&self, index: usize) -> &Self::Output {
         &self.orders[index]
+    }
+}
+
+fn price_levels(n: usize) -> impl FnMut(&&Order) -> bool {
+    let mut levels = 0;
+    let mut last_price = None;
+    move |o| {
+        if last_price != Some(o.limit_price) {
+            levels += 1;
+            last_price = Some(o.limit_price);
+        }
+        levels <= n
     }
 }
 
