@@ -1,0 +1,52 @@
+name: Benchmarks
+
+on:
+  push:
+    branches:
+      - "master"
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  benchmarks:
+    name: Run benchmarks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup rust toolchain and cache
+        uses: moonrepo/setup-rust@v1
+        with:
+          channel: "1.99"
+          cache-target: release
+
+      - name: Setup gungraun-runner and Valgrind
+        uses: gungraun/setup-gungraun@v1
+
+      # Base and head run on the same machine, so CPU differences between
+      # GitHub runners cannot split the comparison.
+      - name: Benchmark the base commit
+        id: base
+        if: github.event_name == 'pull_request'
+        run: |
+          git checkout --quiet ${{ github.event.pull_request.base.sha }}
+          if grep -q '^gungraun' Cargo.toml; then
+            cargo bench --bench '*' -- --save-baseline=base
+            echo "baseline=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "The base commit has no gungraun benches; skipping the comparison."
+          fi
+          git checkout --quiet ${{ github.sha }}
+
+      - name: Benchmark the head commit
+        run: |
+          if [ "${{ steps.base.outputs.baseline }}" = "true" ]; then
+            cargo bench --bench '*' -- --baseline=base
+          else
+            cargo bench --bench '*'
+          fi
