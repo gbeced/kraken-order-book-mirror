@@ -27,7 +27,7 @@ tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
 
 [dev-dependencies]
-divan = { package = "codspeed-divan-compat", version = "5.0.3" }
+gungraun = "0.20.0"
 uuid = { version = "1.27.0", features = ["v4"] }
 
 [[bench]]
@@ -41,3 +41,7 @@ harness = false
 [[bench]]
 name = "mirror"
 harness = false
+
+# gungraun needs debug symbols to attach Callgrind to the benchmark functions.
+[profile.bench]
+debug = true

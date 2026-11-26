@@ -1,5 +1,9 @@
 use std::fmt::Write;
+use std::hint::black_box;
 
+use gungraun::{
+    Callgrind, LibraryBenchmarkConfig, library_benchmark, library_benchmark_group, main,
+};
 use rust_order_book_mirror::common::error::Error;
 use rust_order_book_mirror::kraken::level3::mirror::OrderBookMirror;
 
@@ -28,10 +32,6 @@ const SNAPSHOT_FIXTURE: &str = concat!(
 );
 // The fixture holds 10 price levels per side.
 const SNAPSHOT_FIXTURE_DEPTH: usize = 10;
-
-fn main() {
-    divan::main();
-}
 
 // Frame patterns seen in the captured stream (4891 updates):
 // - single add, new level or joining one: ~50%
@@ -64,25 +64,6 @@ const fn case(pattern: Pattern, place: Place) -> Case {
     Case { pattern, place }
 }
 
-const CASES: [Case; 16] = [
-    case(Pattern::AddNewLevel, Place::Begin),
-    case(Pattern::AddNewLevel, Place::Middle),
-    case(Pattern::AddNewLevel, Place::End),
-    case(Pattern::AddJoin, Place::Begin),
-    case(Pattern::AddJoin, Place::Middle),
-    case(Pattern::AddJoin, Place::End),
-    case(Pattern::Cancel, Place::Begin),
-    case(Pattern::Cancel, Place::Middle),
-    case(Pattern::Cancel, Place::End),
-    case(Pattern::Fill, Place::Begin),
-    case(Pattern::ClearBackfill(1), Place::Begin),
-    case(Pattern::ClearBackfill(1), Place::Middle),
-    case(Pattern::ClearBackfill(1), Place::End),
-    case(Pattern::ClearBackfill(4), Place::Begin),
-    case(Pattern::ClearBackfill(4), Place::Middle),
-    case(Pattern::ClearBackfill(4), Place::End),
-];
-
 impl std::fmt::Display for Case {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.pattern {
@@ -107,63 +88,98 @@ impl std::fmt::Debug for Case {
     }
 }
 
-// One update on a book that already holds the snapshot. `with_inputs` rebuilds
-// that book outside the timer. `bench_local_refs` keeps the mirror and drops it
-// after the timed call, so the sample is `on_message` and not book teardown.
-#[divan::bench(args = CASES)]
-fn on_update(bencher: divan::Bencher, case: Case) {
+// One update on a book that already holds the snapshot. The setup builds
+// that book outside the measured function. The mirror and the frame are
+// returned so their drop is not measured either: the sample is `on_message`.
+fn setup_update(case: Case) -> (OrderBookMirror, String) {
     let prepared = prepare(case);
-    bencher
-        .with_inputs(|| {
-            let mut mirror = OrderBookMirror::new(DEPTH, PRICE_SCALE, QTY_SCALE);
-            mirror
-                .on_message(&prepared.snapshot)
-                .unwrap_or_else(|err| panic!("{case} snapshot: {err}"));
-            mirror
-        })
-        .bench_local_refs(|mirror| {
-            mirror
-                .on_message(divan::black_box(&prepared.update))
-                .unwrap_or_else(|err| panic!("{case} update: {err}"));
-            divan::black_box(mirror.get_order_book().expect("book").asks.len())
-        });
+    let mut mirror = OrderBookMirror::new(DEPTH, PRICE_SCALE, QTY_SCALE);
+    mirror
+        .on_message(&prepared.snapshot)
+        .unwrap_or_else(|err| panic!("{case} snapshot: {err}"));
+    (mirror, prepared.update)
 }
 
-// Every update frame of the captured BTC/USD stream, in order, on a depth-10
-// book. The snapshot apply is outside the timer.
-#[divan::bench]
-fn replay_stream(bencher: divan::Bencher) {
+#[library_benchmark(setup = setup_update)]
+#[bench::add_new_level_begin(case(Pattern::AddNewLevel, Place::Begin))]
+#[bench::add_new_level_middle(case(Pattern::AddNewLevel, Place::Middle))]
+#[bench::add_new_level_end(case(Pattern::AddNewLevel, Place::End))]
+#[bench::add_join_begin(case(Pattern::AddJoin, Place::Begin))]
+#[bench::add_join_middle(case(Pattern::AddJoin, Place::Middle))]
+#[bench::add_join_end(case(Pattern::AddJoin, Place::End))]
+#[bench::cancel_begin(case(Pattern::Cancel, Place::Begin))]
+#[bench::cancel_middle(case(Pattern::Cancel, Place::Middle))]
+#[bench::cancel_end(case(Pattern::Cancel, Place::End))]
+#[bench::fill_begin(case(Pattern::Fill, Place::Begin))]
+#[bench::clear_backfill_1_begin(case(Pattern::ClearBackfill(1), Place::Begin))]
+#[bench::clear_backfill_1_middle(case(Pattern::ClearBackfill(1), Place::Middle))]
+#[bench::clear_backfill_1_end(case(Pattern::ClearBackfill(1), Place::End))]
+#[bench::clear_backfill_4_begin(case(Pattern::ClearBackfill(4), Place::Begin))]
+#[bench::clear_backfill_4_middle(case(Pattern::ClearBackfill(4), Place::Middle))]
+#[bench::clear_backfill_4_end(case(Pattern::ClearBackfill(4), Place::End))]
+fn on_update(input: (OrderBookMirror, String)) -> (OrderBookMirror, String) {
+    let (mut mirror, update) = input;
+    mirror
+        .on_message(black_box(&update))
+        .unwrap_or_else(|err| panic!("update: {err}"));
+    black_box(mirror.get_order_book().expect("book").asks.len());
+    (mirror, update)
+}
+
+// The captured BTC/USD stream on a depth-10 book with its snapshot applied.
+fn setup_stream() -> (OrderBookMirror, String) {
     let log = std::fs::read_to_string(STREAM_LOG).expect("stream log");
-    let mut lines = log.lines();
-    let snapshot = lines.next().expect("snapshot line");
-    let updates: Vec<&str> = lines.collect();
-    bencher
-        .with_inputs(|| {
-            let mut mirror = OrderBookMirror::new(STREAM_DEPTH, PRICE_SCALE, QTY_SCALE);
-            mirror.on_message(snapshot).expect("snapshot");
-            mirror
-        })
-        .bench_local_refs(|mirror| {
-            for update in &updates {
-                mirror
-                    .on_message(divan::black_box(update))
-                    .unwrap_or_else(|err| panic!("stream update: {err}"));
-            }
-            divan::black_box(mirror.get_order_book().expect("book").asks.len())
-        });
+    let snapshot = log.lines().next().expect("snapshot line");
+    let mut mirror = OrderBookMirror::new(STREAM_DEPTH, PRICE_SCALE, QTY_SCALE);
+    mirror.on_message(snapshot).expect("snapshot");
+    (mirror, log)
 }
 
-// The CRC alone on the real BTC/USD snapshot in `level3_snapshot.json`: 10
-// levels per side (18 ask and 13 bid orders), all of which the checksum
-// hashes. The book is built once; the checksum does not change it.
-#[divan::bench]
-fn calculate_checksum(bencher: divan::Bencher) {
+// Every update frame of the captured stream, in order. The snapshot apply is
+// in the setup.
+#[library_benchmark(setup = setup_stream)]
+fn replay_stream(input: (OrderBookMirror, String)) -> (OrderBookMirror, String) {
+    let (mut mirror, log) = input;
+    for update in log.lines().skip(1) {
+        mirror
+            .on_message(black_box(update))
+            .unwrap_or_else(|err| panic!("stream update: {err}"));
+    }
+    black_box(mirror.get_order_book().expect("book").asks.len());
+    (mirror, log)
+}
+
+// The real BTC/USD snapshot in `level3_snapshot.json`: 10 levels per side (18
+// ask and 13 bid orders), all of which the checksum hashes.
+fn setup_checksum() -> OrderBookMirror {
     let snapshot = std::fs::read_to_string(SNAPSHOT_FIXTURE).expect("snapshot fixture");
     let mut mirror = OrderBookMirror::new(SNAPSHOT_FIXTURE_DEPTH, PRICE_SCALE, QTY_SCALE);
     mirror.on_message(&snapshot).expect("snapshot");
     assert_eq!(mirror.calculate_checksum(), Some(30690248));
-    bencher.bench_local(|| divan::black_box(&mirror).calculate_checksum());
+    mirror
 }
+
+// The CRC alone. The checksum does not change the book.
+#[library_benchmark(setup = setup_checksum)]
+fn calculate_checksum(mirror: OrderBookMirror) -> (Option<u32>, OrderBookMirror) {
+    let checksum = black_box(&mirror).calculate_checksum();
+    (black_box(checksum), mirror)
+}
+
+library_benchmark_group!(
+    name = mirror_group,
+    benchmarks = [on_update, replay_stream, calculate_checksum]
+);
+
+// Fixed cache geometry so cache metrics don't depend on the host CPU.
+main!(
+    config = LibraryBenchmarkConfig::default().tool(Callgrind::with_args([
+        "--I1=32768,8,64",
+        "--D1=32768,8,64",
+        "--LL=8388608,16,64",
+    ])),
+    library_benchmark_groups = mirror_group
+);
 
 struct Prepared {
     snapshot: String,

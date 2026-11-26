@@ -1,7 +1,5 @@
 # Kraken Order Book Mirror
 
-[![CodSpeed Badge](https://img.shields.io/endpoint?url=https://app.codspeed.io//badge.json)](https://app.codspeed.io//gbeced/kraken-order-book-mirror?utm_source=badge)
-
 A Rust (Tokio) client that keeps a local, order-by-order copy of a Level 3 Kraken spot order book. It authenticates to Kraken, subscribes to the WebSocket v2 [`level3`](https://docs.kraken.com/api/docs/websocket-v2/level3/) channel for one trading pair, applies every snapshot and update to an in-memory book, and verifies each update against Kraken's CRC32 checksum. If the local book ever disagrees with Kraken, the program stops with an error instead of showing a wrong book.
 
 On top of the mirrored book there is a terminal dashboard, a raw frame recorder, and an offline replay benchmark.
@@ -33,12 +31,28 @@ set -a; source .env; set +a
 ```bash
 cargo build --release   # build
 cargo test              # unit and integration tests, offline
-cargo bench             # Divan micro-benchmarks
+cargo bench --bench '*' # gungraun benchmarks (Linux + Valgrind)
 ```
 
 `cargo test` needs no network and no API keys. The integration tests in `tests/mirror.rs` replay the fixtures in `tests/data/` through the mirror.
 
-The Divan benches (`benches/`) cover single-update applies on a 1000-level book, a replay of `tests/data/btc_usd_stream.log`, and the unit conversion helpers. CodSpeed runs them under CPU simulation in GitHub Actions on every push to `master` and on pull requests.
+The benches (`benches/`) cover single-update applies on a 1000-level book, a replay of `tests/data/btc_usd_stream.log`, the checksum, and the unit conversion helpers. They use [gungraun](https://github.com/gungraun/gungraun), which runs each benchmark once under Valgrind's Callgrind and reports instruction counts, simulated cache hits, and estimated cycles. The cache geometry is fixed in the bench config, so the numbers don't depend on the host CPU's caches. Setup (building the book) is not measured.
+
+gungraun needs Linux, Valgrind, and a `gungraun-runner` binary of the same version as the `gungraun` dev-dependency (`cargo install gungraun-runner --version 0.20.0`). `--bench '*'` selects only the bench targets; without it the library's test harness rejects gungraun flags. Save a baseline and compare against it:
+
+```bash
+cargo bench --bench '*' -- --save-baseline=master
+cargo bench --bench '*' -- --baseline=master
+```
+
+On macOS, `scripts/bench.sh` runs the same thing in an Ubuntu container (`docker/bench.Dockerfile`), passing its arguments to `cargo bench`. Its build and baselines live in `target/linux/`. Compare local runs only with other local runs.
+
+```bash
+scripts/bench.sh -- --save-baseline=master
+scripts/bench.sh --bench mirror -- --baseline=master
+```
+
+In GitHub Actions (`.github/workflows/benchmarks.yml`), pull requests bench the base commit and then the head in the same job, and the log shows the per-metric difference. Pushes to `master` just run the benches.
 
 ## Commands
 
@@ -145,7 +159,9 @@ src/
     ts.rs              timestamps (ns since epoch)
     json_utils.rs      small JSON scanner
   tui/                 AI Generated ratatui dashboard: metrics, rendering, layout modes
-benches/               Divan / CodSpeed benchmarks
+benches/               gungraun (Callgrind) benchmarks
+docker/                Linux image for running the benches on macOS
+scripts/bench.sh       runs cargo bench in that image
 tests/                 integration tests and fixtures (tests/data/)
 docs/                  dashboard user guide and screenshot
 ```
