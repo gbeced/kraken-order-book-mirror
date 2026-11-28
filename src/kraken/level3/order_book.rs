@@ -149,6 +149,25 @@ impl<O: SortOrder> Orders<O> {
         self.orders.iter()
     }
 
+    pub fn take_up_to_price_level(&self, level: usize) -> impl Iterator<Item = &Order> {
+        let mut levels = 1;
+        let mut last_price = if let Some(first) = self.orders.first() {
+            first.limit_price
+        } else {
+            0
+        };
+
+        self.orders
+            .iter()
+            .take_while(move |o| {
+                if o.limit_price != last_price {
+                    levels += 1;
+                    last_price = o.limit_price;
+                }
+                levels <= level
+        })
+    }
+
     pub(super) fn insert_order(&mut self, order: Order) {
         let idx = self.orders.partition_point(|o| O::order_before(o, &order));
         self.orders.insert(idx, order);
