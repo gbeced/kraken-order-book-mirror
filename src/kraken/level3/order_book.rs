@@ -150,9 +150,22 @@ impl<O: SortOrder> Orders<O> {
     }
 
     pub fn take_up_to_price_level(&self, level: usize) -> impl Iterator<Item = &Order> {
+        let mut levels = 1;
+        let mut last_price = if let Some(first) = self.orders.first() {
+            first.limit_price
+        } else {
+            0
+        };
+
         self.orders
             .iter()
-            .take_while(price_levels(level))
+            .take_while(move |o| {
+                if o.limit_price != last_price {
+                    levels += 1;
+                    last_price = o.limit_price;
+                }
+                levels <= level
+        })
     }
 
     pub(super) fn insert_order(&mut self, order: Order) {
@@ -272,18 +285,6 @@ impl<O: SortOrder> Index<usize> for Orders<O> {
 
     fn index(&self, index: usize) -> &Self::Output {
         &self.orders[index]
-    }
-}
-
-fn price_levels(n: usize) -> impl FnMut(&&Order) -> bool {
-    let mut levels = 0;
-    let mut last_price = None;
-    move |o| {
-        if last_price != Some(o.limit_price) {
-            levels += 1;
-            last_price = Some(o.limit_price);
-        }
-        levels <= n
     }
 }
 
