@@ -5,9 +5,15 @@ use gungraun::{
 };
 use rust_order_book_mirror::common::units;
 
-// The output buffer is allocated outside the measured function.
+// The output buffer is allocated outside the measured function. Each
+// benchmark is a single cold run, so one serialization here warms the code and
+// data lines; otherwise their first-touch misses depend on the binary's layout.
 fn with_buffer(units: u64) -> (u64, String) {
-    (units, String::with_capacity(20))
+    let mut out = String::with_capacity(20);
+    units::serialize_units(black_box(units), &mut out);
+    black_box(&out);
+    out.clear();
+    (units, out)
 }
 
 #[library_benchmark(setup = with_buffer)]
